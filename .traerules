@@ -1,0 +1,127 @@
+# AIRE (Autonomous Intelligence Research Engine) - 技术规范
+
+## 核心约束 (Core Constraints)
+
+### 编程范式
+- 必须使用异步编程 (async/await)，禁用同步 IO 库
+- 所有 IO 操作必须使用 asyncio、httpx 等异步库
+- 禁止使用 requests、urllib 等同步请求库
+
+### 状态机库
+- 强制使用 LangGraph 驱动状态机
+- 禁止手动写 while 循环控制状态
+- 状态流转必须通过 LangGraph 的节点和边来控制
+
+### 数据验证
+- 所有数据对象必须继承 Pydantic v2 BaseModel
+- 必须开启 strict mode (`model_config = {"strict": True}`)
+- 使用 Pydantic Field 进行字段验证
+
+### 错误处理
+- 禁止使用空的 try-except (必须有具体的异常处理)
+- Scraper 必须实现 Exponential Backoff 重试机制
+
+### 核心算法
+- TaskTree 必须支持优先级排序
+- Priority Score 计算公式: `Relevance * 0.7 + Depth_Penalty * 0.3`
+- Depth_Penalty = max(0.0, 1.0 - (depth * 0.3))
+
+### MCP 协议
+- 工具调用必须符合 Model Context Protocol 规范
+
+### 数据库
+- 使用 SQLite (WAL Mode) via AsyncSqliteSaver
+- 数据库文件: research.db
+- 必须开启 WAL 模式和 busy_timeout
+
+## 技术栈
+
+- Orchestration: LangGraph (Python)
+- State Persistence: SQLite (WAL Mode) via AsyncSqliteSaver
+- Models: GLM-4 (Planning/Routing), Kimi (Fact Distillation), DeepSeek-V3 (Report Writing)
+- Data Validation: Pydantic v2 (Strict Mode)
+- Concurrency: asyncio, httpx
+- Web Scraping: Jina Reader API, Playwright (async)
+- Resilience: tenacity (Exponential Backoff)
+
+## 节点定义 (Node Definitions)
+
+1. **planner**: 负责任务拆解，生成子任务树
+2. **researcher**: 负责搜索和信息收集（调用 MCP Gateway + SmartScraper）
+3. **distiller**: 负责从 Markdown 提取 Atomic Fact
+4. **writer**: 负责带引用的报告合成
+
+## MCP Gateway 工具定义
+
+### Tavily Search Provider
+- Tool Name: `tavily_search`
+- Parameters: `query` (string), `max_results` (integer, default 5)
+- Returns: List[SearchResult]
+
+### Exa Search Provider
+- Tool Name: `exa_search`
+- Parameters: `query` (string), `max_results` (integer, default 5)
+- Returns: List[SearchResult]
+
+## SmartScraper 多态爬虫
+
+### 加载策略
+1. 优先调用 Jina Reader API (r.jina.ai) 进行高速 URL 转 Markdown
+2. 若 Jina 返回失败、超时 (20s)、403 或内容不足，自动切换至 Playwright Headless
+
+### 鲁棒性控制
+- 使用 tenacity 库实现指数退避重试 (Exponential Backoff)
+- 针对 429 (Rate Limit) 错误自动休眠重试
+- 单个网页抓取强制超时 20s
+
+### 并发控制
+- 使用 `asyncio.Semaphore(3)` 限制并发抓取数
+- 适配国产模型 API 的频率限制
+
+### 去噪预处理
+剥离以下内容：
+- 导航栏、页脚、广告占位符
+- Login/Register/Subscribe 链接
+- Cookie Banner、Popup、Modal
+- 社交媒体链接
+- 短于 50 字符的导航文本
+
+## 状态结构 (State Structure)
+
+```python
+ResearchState:
+  - task_tree: Dict[str, TaskNode]
+  - fact_pool: List[str]
+  - atomic_facts: List[AtomicFact]
+  - token_usage: TokenUsage
+  - current_focus: Optional[str]
+  - root_task_id: Optional[str]
+  - completed_tasks: List[str]
+  - failed_tasks: List[str]
+  - raw_scraped_data: List[ScrapedData]  # 新增
+  - search_results: List[SearchResult]    # 新增
+
+SearchResult:
+  - url: str
+  - title: str
+  - snippet: str
+  - score: float
+  - raw_content: Optional[str]
+
+ScrapedData:
+  - url: str
+  - markdown: str
+  - title: str
+  - fetch_method: Literal["jina", "playwright"]
+  - timestamp: datetime
+  - error: Optional[str]
+```
+
+## 禁用项 (Prohibited)
+
+- 同步 IO 库 (requests, urllib, sqlite3 标准库等)
+- 手动状态循环控制
+- 空的异常处理
+- 非 Pydantic 数据对象
+- 硬编码的敏感信息
+- 同步浏览器操作（必须使用 playwright.async_api）

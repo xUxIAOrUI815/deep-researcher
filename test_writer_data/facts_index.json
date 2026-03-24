@@ -1,0 +1,10 @@
+{
+  "stats": {
+    "total_facts": 0,
+    "verified_facts": 0,
+    "conflicting_facts": 0,
+    "conflicts_detected": 0,
+    "duplicates_merged": 0
+  },
+  "facts": {}
+}
