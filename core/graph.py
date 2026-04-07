@@ -12,6 +12,7 @@ import aiosqlite
 
 from schemas.state import TaskNode, AtomicFact, ResearchState, TokenUsage, compute_priority, ScrapedData, SearchResult
 from providers import MCPGateway, SmartScraper
+from agents import DistillerAgent
 
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
@@ -85,10 +86,6 @@ async def researcher_async(state: GraphState) -> GraphState:
             scraped_data = await scraper.scrape_batch(urls, force_playwright=False)
             state["raw_scraped_data"] = [s.model_dump() for s in scraped_data]
 
-            for scraped in scraped_data:
-                if scraped.markdown and not scraped.error:
-                    state["fact_pool"].append(scraped.markdown[:500])
-
             print(f"[RESEARCHER] Scraped {len(scraped_data)} pages successfully")
 
         await scraper.close()
@@ -108,21 +105,47 @@ def researcher(state: GraphState) -> GraphState:
     return asyncio.get_event_loop().run_until_complete(researcher_async(state))
 
 
-def distiller(state: GraphState) -> GraphState:
-    print(f"[DISTILLER] Distilling facts to atomic units...")
+async def distiller_async(state: GraphState) -> GraphState:
+    print(f"[DISTILLER] Distilling facts to atomic units using DistillerAgent...")
 
-    for fact_text in state["fact_pool"][:3]:
-        atomic_fact = AtomicFact(
-            text=fact_text,
-            source_url="https://example.com/mock-source",
-            confidence=0.85,
-            task_id=state.get("current_focus")
-        )
-        state["atomic_facts"].append(atomic_fact.model_dump())
-
-    state["fact_pool"] = state["fact_pool"][3:]
-    state["token_usage"]["distillation_tokens"] += 200
-    print(f"[DISTILLER] Distillation complete. Atomic facts: {len(state['atomic_facts'])}")
+    distiller_agent = DistillerAgent()
+    
+    scraped_data = state.get("raw_scraped_data", [])
+    
+    if not scraped_data:
+        print(f"[DISTILLER] No scraped data available, skipping distillation")
+        return state
+    
+    items = []
+    for scraped in scraped_data:
+        if scraped.get("markdown") and not scraped.get("error"):
+            items.append({
+                "markdown": scraped["markdown"],
+                "url": scraped.get("url", ""),
+                "task_id": state.get("current_focus")
+            })
+    
+    if not items:
+        print(f"[DISTILLER] No valid items to distill")
+        return state
+    
+    total_tokens = 0
+    extracted_count = 0
+    
+    try:
+        results = await distiller_agent.distill_batch(items)
+        
+        for result in results:
+            for fact in result.facts:
+                state["atomic_facts"].append(fact.model_dump())
+                extracted_count += 1
+        
+        print(f"[DISTILLER] Extracted {extracted_count} atomic facts from {len(items)} pages")
+        
+    except Exception as e:
+        print(f"[DISTILLER] Error during distillation: {e}")
+    
+    state["token_usage"]["distillation_tokens"] += total_tokens
     return state
 
 
@@ -248,7 +271,7 @@ def create_research_graph(checkpointer: AsyncSqliteSaver) -> StateGraph:
 
     workflow.add_node("planner", planner)
     workflow.add_node("researcher", researcher_async)
-    workflow.add_node("distiller", distiller)
+    workflow.add_node("distiller", distiller_async)
     workflow.add_node("writer", writer_async)
 
     workflow.set_entry_point("planner")
