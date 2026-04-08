@@ -32,3 +32,90 @@
     - GRPC_PORT: GRPC端口号, 可以通过环境变量QDRANT_GRPC_PORT覆盖
     - USE_QDRANT: 是否使用Qdrant向量数据库, 可通过环境变量USE_QDRANT覆盖
     - COLLECTION_VECTOR_SIZE: 向量集合的维度大小, 用于存储嵌入向量
+  - ModelConfig：模型相关配置, 支持通过环境变量进行配置, 包含两个子配置: 
+    - 主配置: DEFAULT_MODEL: 默认使用的模型
+    - GLM子配置/DeepSeek子配置:
+      - API_KEY: 从环境配置中获取
+      - API_BASE: 
+      - MODEL_NAME: 模型名称
+
+### ContentTransformer模块
+  结构化清洗与视图转换模块, 将原始的Markdown文本转换为结构化的内容, 包括元数据提取、内容清洗和章节提取
+  - ContentMetadata: 存储内容的元数据信息
+  - StructuredContent: 存储结构化的内容
+  - ContentTransformer: 初始化转换器, 
+    - 将原始的Markdown文本转换为结构化的内容
+    - 从Markdown文本提取元数据
+    - 清洗Markdown文本, 定义一系列需要跳过的模式
+    - 提取Markdown文本中的章节标题
+  
+### Convergence
+  收敛检查器，用于判断研究过程中是否应该结束(收敛)。通过分析当前研究状态，基于预设的规则和配置参数，判断研究是否收敛。
+  - ConvergenceDecision: 存储收敛决策的结果
+    - should_converge: 布尔值，是否收敛
+    - reason: 字符串，说明收敛或不收敛的原因
+    - action: 字符串，表示应该采取的行动 finish或continue
+    - skip_pending_tasks: 布尔值，表示是否跳过待办任务
+  - ConvergenceChecker: 收敛检查器
+    - check 方法: 判断条件
+      修改planner的设计，先设置大纲，结合大纲和任务树共同确定任务是否终止。
+
+### graph
+  - GraphState: 研究图的状态结构
+    - 任务树
+    - 事实池
+    - 原子事实
+    - 令牌使用
+    - 当前焦点任务
+    - 根任务ID
+    - 已完成的任务
+    - 失败的任务
+    - 消息列表
+    - 原始抓取数据
+    - 搜索结果
+    - 最终报告
+  - 节点函数
+    - planner 节点
+      - 和Agents/planner对比
+        1. 这部分代码只初始化根节点，模拟消耗token，固定+100，假装做了规划，没有智能决策，只是初始化占位函数
+    - researcher 节点
+      - 执行研究任务，包括搜索和网页抓取
+      - 实现
+        - 查找待处理任务
+        - 使用 MCPGateway 进行搜索
+        - 使用 SmartScraper 抓取网页内容
+        - 更新任务状态和收集数据
+    - distiller 节点
+      当前的任务是：从文章、网页中提取原子事实，生成摘要
+      不依赖框架，可以自己执行
+      - 核心模块
+        - 初始化配置 信号量控制并发，线程锁保证日志/异常安全打印
+        - 提示词工程
+          - 只提取可验证事实
+          - 实体明确
+          - balabala
+        - API 调用异常处理
+        - 结果解析 
+    - writer
+      根据提取的原子事实生成调研简报 × 
+      应该是深度调研报告
+      - 处理原子事实，生成上下文
+      - 构建提示词生成报告 调用 DeepSeek API 生成报告
+      - 处理API调用错误和速率限制
+      - 没有API密钥时生成模拟报告
+  - 控制函数
+    决定工作流是否应该继续
+    检查是否存在待处理的任务
+  - 创建研究图
+    添加节点和编译图
+  - SQLite存储
+    保存工作流状态
+    创建并返回 AsyncSqliteSaver
+  - 研究周期
+    - 初始化SQLite存储
+    - 创建研究图
+    - 设置初始状态
+    - 运行工作流
+    - 打印结果统计
+    - 关闭数据库连接并返回结果
+  
