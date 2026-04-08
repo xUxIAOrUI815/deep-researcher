@@ -34,3 +34,6 @@ knowledge_data/
 .vscode/
 *.swp
 *.swo
+
+
+.env
