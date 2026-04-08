@@ -1,6 +1,7 @@
 # core 核心逻辑模块说明
 
 ## 文件目录
+```
 ├── config.py          # 配置管理
 ├── graph.py           # LangGraph 工作流图
 ├── knowledge.py       # 知识管理器
@@ -10,6 +11,7 @@
 ├── content_transformer.py  # 结构化清洗模块
 ├── semantic_chunker.py     # 语义分块模块 
 └── vector_store_qdrant.py  # 向量存储
+```
 
 ## 模块功能介绍
 
@@ -54,7 +56,7 @@
   - ConvergenceDecision: 存储收敛决策的结果
     - should_converge: 布尔值，是否收敛
     - reason: 字符串，说明收敛或不收敛的原因
-    - action: 字符串，表示应该采取的行动 finish或continue
+    - action: 字符串，表示应该采取的行动 finish或continue  这个判断来自于planner_action 
     - skip_pending_tasks: 布尔值，表示是否跳过待办任务
   - ConvergenceChecker: 收敛检查器
     - check 方法: 判断条件
@@ -118,4 +120,94 @@
     - 运行工作流
     - 打印结果统计
     - 关闭数据库连接并返回结果
+
+### knowledge
+知识管理系统，用于存储、管理和检索研究过程中提取的原子事实，并提供了事实冲突检测、相似性搜索等功能
+
+用distillerAgent来调用knowledge?
+- FactStatus 定义了事实的枚举状态
+  - ACTIVE ：活跃状态，新添加的事实
+  - VERIFIED ：已验证状态，由多个来源确认的事实
+  - CONFLICTING ：冲突状态，与其他事实存在矛盾
+  - SUPERSEDED ：被取代状态，被新事实取代的旧事实
+- EmbeddingModel 嵌入模型
+  - 生成文本的向量嵌入，用于相似性计算
+- FactConflict
+  - 字段设计有问题
+  - fact_id_1 ：第一个冲突事实的 ID
+  - fact_id_2 ：第二个冲突事实的 ID
+  - conflict_description ：冲突描述
+  - detected_at ：冲突检测时间
+- KnowledgeStatus
+  - 存储知识管理系统的统计信息
+  - total_facts ：总事实数
+  - verified_facts ：已验证事实数
+  - conflicting_facts ：冲突事实数
+  - conflicts_detected ：检测到的冲突数
+  - duplicates_merged ：合并的重复数
+- StoredFact
+  - 存储带有嵌入的原子事实
+  - 生成唯一 ID
+  - 存储原子事实和其嵌入向量
+  - 跟踪事实状态
+  - 提供转换为字典的方法，用于存储
+- KnowledgeManager 知识管理类
+  - 管理事实的存储、检索、冲突检测
+    - 设置存储路径
+    - 初始化嵌入模型
+    - 创建事实字典
+    - 设置并发限制信号量
+    - 初始化统计信息
+    - 加载现有数据 
+  - 加载和保存方法
+    - JSON 文件存储数据
+    - 加载时重建StoredFact对象
+    - 保存时将StoredFact对象转换为字典
+  - 相似性计算方法
+    - 利用向量相似度并查找相似事实
+    - 遍历？
+    - 为什么不用向量数据库
+  - 添加事实方法
+    - 添加事实并处理重复和冲突
+      - 批量添加事实，用信号量控制并发
+      - 处理重复事实
+      - 处理验证事实
+      - 处理冲突事实
+      - 添加新事实
+  - 搜索和查询方法
+    - 当前阈值设置为 0 ？
+  - 管理方法
+    - 删除单个事实
+    - 清空整个事实集合
+
+### planner_logic
+信息饱和度检查
+- SaturationResult 数据类
+  - 存储信息饱和度检查的结果
+    - is_sataturated: 是否饱和
+    - repetition_rate: 重复率 相似事实数/总检查事实数
+    - new_facts_count: 新事物的数量
+    - similar_count: 相似事实数
+    - forced_finish: 是否强制结束
+  - SaturationChecker 饱和度检查器类
+    - 接受 KnowledgeManeger 实例，用于查找相似事实
+    - 检查新收集的事实是否与已有的事实重复，判断是否达到信息饱和
+      - new_facts: 新收集的事实列表
+      - collection_name: 集合名称
+      - is_user_triggered: 是否由用户触发
+    - 实现逻辑
+      如果没有新事实，返回未饱和状态
+      如果是用户触发的任务，跳过饱和度检查
+      遍历每个新事实，使用 KnowledgeManager 查找相似事实 (这里是遍历会有什么问题？)
+      计算重复率
+      如果重复率超过阈值，认为达到信息饱和(即当前能找到的信息已经没有新的价值)
+      返回饱和度检查结果
+
+### router
+路由器功能，决定研究工作流的下一步操作，基于ConvergenceChecker的决策结果
+- should_continue
+  - 根据当前研究状态，决定工作流的下一步操作
+- graph.py 也有 should_continue 方法
+  - 比较
+  
   
