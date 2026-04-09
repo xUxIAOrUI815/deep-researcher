@@ -167,8 +167,8 @@ class DistillerOutputs(BaseModel):
     knowledge_refs: Dict[str, Any] = Field(default_factory=dict)
     section_evidence_packs: List[Dict[str, Any]] = Field(default_factory=list)
     compression_summary: str = ""
+    coverage_summary: Dict[str, Any] = Field(default_factory=dict)
     unresolved_gaps: List[str] = Field(default_factory=list)
-    suggested_followups: List[str] = Field(default_factory=list)
     summary: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
 
