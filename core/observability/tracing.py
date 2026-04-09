@@ -48,6 +48,9 @@ class EventType(str, Enum):
     FACT_EXTRACTED = "fact.extracted"
     EVIDENCE_PACK_CREATED = "evidence_pack.created"
     COMPRESSION_COMPLETED = "compression.completed"
+    WRITER_STARTED = "writer.started"
+    SECTION_GENERATED = "section.generated"
+    WRITER_COMPLETED = "writer.completed"
 
 
 @dataclass
