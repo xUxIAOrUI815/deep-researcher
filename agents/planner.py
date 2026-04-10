@@ -2,6 +2,8 @@ from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
 from core.config import ResearchConfig
+from schemas.state import PlannerState
+from schemas.task_tree import TaskTreePatch
 
 
 @dataclass
