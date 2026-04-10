@@ -514,6 +514,7 @@ def _build_replanning_patches(
     existing_titles = {str(task.get("title", "")).lower() for task in task_tree.values()}
     patches: List[TaskTreePatch] = []
     new_task_ids: List[str] = []
+    coverage_summary = distiller_outputs.get("coverage_summary", {}) or {}
 
     for gap in distiller_outputs.get("unresolved_gaps", [])[:2]:
         title = f"Resolve gap: {gap}"[:120]
@@ -549,6 +550,34 @@ def _build_replanning_patches(
             parent_task_id=root_id,
             related_evidence_ids=distiller_outputs.get("evidence_ids", []),
             related_fact_ids=distiller_outputs.get("fact_ids", []),
+            created_by="planner",
+            updated_by="planner",
+        )
+        patches.append(TaskTreePatch(operation="attach", parent_task_id=root_id, task=task, rationale=task.rationale, created_by="planner"))
+        new_task_ids.append(task.id)
+
+    for section_id in coverage_summary.get("uncovered_sections", [])[:1]:
+        title = f"Strengthen section coverage: {section_id}"[:120]
+        if title.lower() in existing_titles:
+            continue
+        section_goal = next(
+            (
+                item.get("goal", "")
+                for item in coverage_summary.get("section_status", [])
+                if item.get("section_id") == section_id
+            ),
+            "",
+        )
+        task = TaskNode(
+            query=user_query,
+            title=title,
+            rationale=f"Coverage summary marked section {section_id} as under-covered. {section_goal}".strip(),
+            node_type="section_support",
+            status="pending",
+            depth=1,
+            priority=0.74,
+            parent_id=root_id,
+            parent_task_id=root_id,
             created_by="planner",
             updated_by="planner",
         )
@@ -635,13 +664,19 @@ def _coverage_score(
     section_evidence_packs: List[Dict[str, Any]],
     distiller_outputs: Dict[str, Any],
 ) -> float:
+    coverage_summary = distiller_outputs.get("coverage_summary", {}) or {}
     fact_count = len(knowledge_refs.get("fact_ids", [])) + len(distiller_outputs.get("fact_ids", []))
     evidence_count = len(knowledge_refs.get("evidence_ids", [])) + len(distiller_outputs.get("evidence_ids", []))
     pack_score = 0.0
     if section_evidence_packs:
         pack_score = sum(float(pack.get("coverage_score", 0.0)) for pack in section_evidence_packs) / len(section_evidence_packs)
     count_score = min(1.0, (fact_count * 0.08) + (evidence_count * 0.12))
-    return max(pack_score, count_score)
+    summary_score = float(coverage_summary.get("avg_section_coverage", 0.0) or 0.0)
+    if coverage_summary.get("sufficiency_level") == "sufficient_for_writing":
+        summary_score = max(summary_score, 0.7)
+    elif coverage_summary.get("sufficiency_level") == "partial":
+        summary_score = max(summary_score, 0.35)
+    return max(pack_score, count_score, summary_score)
 
 
 async def run_planner(
@@ -710,6 +745,7 @@ async def run_planner(
     outline, generated_goals = _make_default_outline(query, report_outline)
     effective_section_goals = section_goals or generated_goals
 
+    coverage_summary = distiller_outputs.get("coverage_summary", {}) or {}
     coverage = _coverage_score(knowledge_refs, section_evidence_packs, distiller_outputs)
     conflict_count = len(distiller_outputs.get("conflict_ids", []))
     gap_count = len(distiller_outputs.get("unresolved_gaps", []))
@@ -724,6 +760,12 @@ async def run_planner(
         f"novelty={novelty_count}; pending={pending_count}; completed={completed_count}; "
         f"depth_penalty={depth_penalty:.2f}"
     )
+    if coverage_summary:
+        convergence_summary += (
+            f"; sufficiency={coverage_summary.get('sufficiency_level', 'unknown')}; "
+            f"covered_sections={len(coverage_summary.get('covered_sections', []))}; "
+            f"uncovered_sections={len(coverage_summary.get('uncovered_sections', []))}"
+        )
     if current_convergence_status:
         convergence_summary += f"; external={current_convergence_status}"
 
