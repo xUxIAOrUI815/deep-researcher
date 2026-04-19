@@ -46,18 +46,27 @@ class TavilySearchProvider(BaseMCPHandler):
         max_results = params.get("max_results", 5)
 
         if not self.api_key or self.api_key == "demo":
-            await asyncio.sleep(0.1)
-            mock_results = [
-                SearchResult(
-                    url=f"https://example.com/article{i}",
-                    title=f"Mock Article {i} about {query}",
-                    snippet=f"This is a mock search result snippet for {query}...",
-                    score=0.9 - i * 0.1
-                )
-                for i in range(max_results)
-            ]
-            return MCPToolResult(success=True, data=mock_results, tool_name="tavily_search")
+            # await asyncio.sleep(0.1)
+            # mock_results = [
+            #     SearchResult(
+            #         url=f"https://example.com/article{i}",
+            #         title=f"Mock Article {i} about {query}",
+            #         snippet=f"This is a mock search result snippet for {query}...",
+            #         score=0.9 - i * 0.1
+            #     )
+            #     for i in range(max_results)
+            # ]
+            # return MCPToolResult(success=True, data=mock_results, tool_name="tavily_search")
 
+            return MCPToolResult(
+                success=False,
+                data=None,
+                error=(
+                    "TAVILY_API_KEY is required for live Tavily search. "
+                    "Set TAVILY_API_KEY or set RESEARCHER_SEARCH_MODE=mock for offline testing."
+                ),
+                tool_name="tavily_search",
+            )
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -217,6 +226,7 @@ class MCPGateway:
 
         if result.success:
             return result.data
-        else:
-            print(f"[MCPGateway] Search error: {result.error}")
-            return []
+        # else:
+        #     print(f"[MCPGateway] Search error: {result.error}")
+        #     return []
+        raise RuntimeError(f"{tool_name} failed: {result.error}")
