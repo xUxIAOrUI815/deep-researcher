@@ -53,9 +53,11 @@ class AtomicFact(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     text: str
     source_url: str
+    source_id: str = ""
     confidence: float = Field(ge=0.0, le=1.0)
     timestamp: datetime = Field(default_factory=datetime.now)
     task_id: Optional[str] = None
+    section_id: str = ""
     snippet: str = ""
     source_level: Literal["S", "A", "B", "C"] = SourceLevel.C.value
     verified_count: int = 0
@@ -71,8 +73,10 @@ class Claim(BaseModel):
     text: str
     fact_ids: List[str] = Field(default_factory=list)
     evidence_ids: List[str] = Field(default_factory=list)
+    source_ids: List[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     task_id: Optional[str] = None
+    section_id: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
 
     model_config = {"strict": True}
@@ -88,6 +92,7 @@ class Evidence(BaseModel):
     claim_ids: List[str] = Field(default_factory=list)
     quality_score: float = Field(default=0.0, ge=0.0, le=1.0)
     task_id: Optional[str] = None
+    section_id: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
 
     model_config = {"strict": True}
@@ -100,6 +105,8 @@ class ConflictRecord(BaseModel):
     evidence_ids: List[str] = Field(default_factory=list)
     description: str = ""
     severity: str = "medium"
+    task_id: Optional[str] = None
+    section_id: str = ""
     created_at: datetime = Field(default_factory=datetime.now)
 
     model_config = {"strict": True}
@@ -129,7 +136,7 @@ class ScrapedData(BaseModel):
     url: str
     markdown: str
     title: str = ""
-    fetch_method: Literal["jina", "playwright"] = "jina"
+    fetch_method: Literal["jina", "playwright", "mock", "unknown"] = "jina"
     timestamp: datetime = Field(default_factory=datetime.now)
     error: Optional[str] = None
 
@@ -155,6 +162,7 @@ class ResearcherOutputs(BaseModel):
 
 class DistillerOutputs(BaseModel):
     task_id: Optional[str] = None
+    sources: List[Dict[str, Any]] = Field(default_factory=list)
     clean_passages: List[Dict[str, Any]] = Field(default_factory=list)
     atomic_facts: List[AtomicFact] = Field(default_factory=list)
     claims: List[Claim] = Field(default_factory=list)
@@ -181,6 +189,7 @@ class KnowledgeRefs(BaseModel):
     claim_ids: List[str] = Field(default_factory=list)
     evidence_ids: List[str] = Field(default_factory=list)
     conflict_ids: List[str] = Field(default_factory=list)
+    section_pack_ids: List[str] = Field(default_factory=list)
     source_ids: List[str] = Field(default_factory=list)
 
     model_config = {"strict": True}

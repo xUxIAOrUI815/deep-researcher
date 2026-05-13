@@ -1,130 +1,87 @@
-# RAG系统改进任务指导文档
+﻿# RAG绯荤粺鏀硅繘浠诲姟鎸囧鏂囨。
 
-> 版本: 1.0  
-> 创建日期: 2026-04-05  
-> 目标: 将当前的基础知识存储升级为完整的RAG检索增强生成系统
+> 鐗堟湰: 1.0  
+> 鍒涘缓鏃ユ湡: 2026-04-05  
+> 鐩爣: 灏嗗綋鍓嶇殑鍩虹鐭ヨ瘑瀛樺偍鍗囩骇涓哄畬鏁寸殑RAG妫€绱㈠寮虹敓鎴愮郴缁?
+---
+
+## 鐩綍
+
+1. [鐜扮姸鍒嗘瀽](#1-鐜扮姸鍒嗘瀽)
+2. [鏀硅繘浠诲姟娓呭崟](#2-鏀硅繘浠诲姟娓呭崟)
+3. [P0绾т换鍔¤瑙(#3-p0绾т换鍔¤瑙?
+4. [P1绾т换鍔¤瑙(#4-p1绾т换鍔¤瑙?
+5. [P2绾т换鍔¤瑙(#5-p2绾т换鍔¤瑙?
+6. [瀹炴柦璺嚎鍥綸(#6-瀹炴柦璺嚎鍥?
+7. [椋庨櫓璇勪及涓庡簲瀵筣(#7-椋庨櫓璇勪及涓庡簲瀵?
 
 ---
 
-## 目录
+## 1. 鐜扮姸鍒嗘瀽
 
-1. [现状分析](#1-现状分析)
-2. [改进任务清单](#2-改进任务清单)
-3. [P0级任务详解](#3-p0级任务详解)
-4. [P1级任务详解](#4-p1级任务详解)
-5. [P2级任务详解](#5-p2级任务详解)
-6. [实施路线图](#6-实施路线图)
-7. [风险评估与应对](#7-风险评估与应对)
-
----
-
-## 1. 现状分析
-
-### 1.1 当前架构
+### 1.1 褰撳墠鏋舵瀯
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      当前数据流                                   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  MCPGateway ──► SmartScraper ──► DistillerAgent ──► KnowledgeManager
-│  (搜索)         (抓取+降噪)       (提取原子事实)      (JSON本地存储)
-│                                                                 │
-│       ↓              ↓                ↓                  ↓       │
-│  SearchResult   ScrapedData      AtomicFact         StoredFact  │
-│                                                                 │
-│                              ↓                                  │
-│                        Writer (直接使用全部事实)                   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?                     褰撳墠鏁版嵁娴?                                  鈹?鈹溾攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?                                                                鈹?鈹? MCPGateway 鈹€鈹€鈻?SmartScraper 鈹€鈹€鈻?DistillerAgent 鈹€鈹€鈻?KnowledgeManager
+鈹? (鎼滅储)         (鎶撳彇+闄嶅櫔)       (鎻愬彇鍘熷瓙浜嬪疄)      (JSON鏈湴瀛樺偍)
+鈹?                                                                鈹?鈹?      鈫?             鈫?               鈫?                 鈫?      鈹?鈹? SearchResult   ScrapedData      AtomicFact         StoredFact  鈹?鈹?                                                                鈹?鈹?                             鈫?                                 鈹?鈹?                       Writer (鐩存帴浣跨敤鍏ㄩ儴浜嬪疄)                   鈹?鈹?                                                                鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?```
 
-### 1.2 核心问题总结
+### 1.2 鏍稿績闂鎬荤粨
 
-| 问题编号 | 问题描述 | 影响程度 | 当前状态 |
+| 闂缂栧彿 | 闂鎻忚堪 | 褰卞搷绋嬪害 | 褰撳墠鐘舵€?|
 |---------|---------|---------|---------|
-| P0-1 | 向量数据库未集成 | 严重 | QdrantVectorStore已实现但未使用 |
-| P0-2 | 缺乏真正的RAG检索 | 严重 | Writer直接使用全部事实 |
-| P1-1 | 缺乏文档分块策略 | 中等 | 直接截断至8000字符 |
-| P1-2 | 缺乏重排序机制 | 中等 | 仅按向量相似度排序 |
-| P1-3 | 缺乏混合检索 | 中等 | 仅使用向量检索 |
-| P2-1 | 缺乏来源可信度评估 | 较低 | confidence仅由LLM主观判断 |
-| P2-2 | 缺乏增量更新与版本管理 | 较低 | 事实无版本历史 |
+| P0-1 | 鍚戦噺鏁版嵁搴撴湭闆嗘垚 | 涓ラ噸 | QdrantVectorStore宸插疄鐜颁絾鏈娇鐢?|
+| P0-2 | 缂轰箯鐪熸鐨凴AG妫€绱?| 涓ラ噸 | Writer鐩存帴浣跨敤鍏ㄩ儴浜嬪疄 |
+| P1-1 | 缂轰箯鏂囨。鍒嗗潡绛栫暐 | 涓瓑 | 鐩存帴鎴柇鑷?000瀛楃 |
+| P1-2 | 缂轰箯閲嶆帓搴忔満鍒?| 涓瓑 | 浠呮寜鍚戦噺鐩镐技搴︽帓搴?|
+| P1-3 | 缂轰箯娣峰悎妫€绱?| 涓瓑 | 浠呬娇鐢ㄥ悜閲忔绱?|
+| P2-1 | 缂轰箯鏉ユ簮鍙俊搴﹁瘎浼?| 杈冧綆 | confidence浠呯敱LLM涓昏鍒ゆ柇 |
+| P2-2 | 缂轰箯澧為噺鏇存柊涓庣増鏈鐞?| 杈冧綆 | 浜嬪疄鏃犵増鏈巻鍙?|
 
-### 1.3 现有资源评估
+### 1.3 鐜版湁璧勬簮璇勪及
 
-| 组件 | 文件路径 | 可复用程度 | 备注 |
+| 缁勪欢 | 鏂囦欢璺緞 | 鍙鐢ㄧ▼搴?| 澶囨敞 |
 |-----|---------|-----------|-----|
-| QdrantVectorStore | `core/vector_store_qdrant.py` | 高 | 完整实现，仅需集成 |
-| KnowledgeManager | `core/knowledge.py` | 中 | 需要重构以支持向量数据库 |
-| DistillerAgent | `agents/distiller.py` | 中 | 需要添加分块支持 |
-| SmartScraper | `providers/scraper.py` | 高 | 已有降噪功能，可直接使用 |
-| EmbeddingModel | `core/knowledge.py` | 高 | SiliconFlow API已集成 |
+| QdrantVectorStore | `core/vector_store_qdrant.py` | 楂?| 瀹屾暣瀹炵幇锛屼粎闇€闆嗘垚 |
+| KnowledgeManager | `core/knowledge.py` | 涓?| 闇€瑕侀噸鏋勪互鏀寔鍚戦噺鏁版嵁搴?|
+| DistillerAgent | `agents/distiller.py` | 涓?| 闇€瑕佹坊鍔犲垎鍧楁敮鎸?|
+| SmartScraper | `providers/scraper.py` | 楂?| 宸叉湁闄嶅櫔鍔熻兘锛屽彲鐩存帴浣跨敤 |
+| EmbeddingModel | `core/knowledge.py` | 楂?| SiliconFlow API宸查泦鎴?|
 
 ---
 
-## 2. 改进任务清单
+## 2. 鏀硅繘浠诲姟娓呭崟
 
-### 优先级定义
-
-- **P0 (Critical)**: 必须完成，直接影响核心功能
-- **P1 (High)**: 强烈建议完成，显著提升效果
-- **P2 (Medium)**: 建议完成，提升系统健壮性
-
-### 任务总览
+### 浼樺厛绾у畾涔?
+- **P0 (Critical)**: 蹇呴』瀹屾垚锛岀洿鎺ュ奖鍝嶆牳蹇冨姛鑳?- **P1 (High)**: 寮虹儓寤鸿瀹屾垚锛屾樉钁楁彁鍗囨晥鏋?- **P2 (Medium)**: 寤鸿瀹屾垚锛屾彁鍗囩郴缁熷仴澹€?
+### 浠诲姟鎬昏
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                         任务依赖关系                                 │
-├────────────────────────────────────────────────────────────────────┤
-│                                                                    │
-│  P0-1: 向量数据库集成                                               │
-│    │                                                               │
-│    ├──► P0-2: RAG检索实现                                          │
-│    │         │                                                     │
-│    │         └──► P1-2: 重排序机制                                 │
-│    │                                                               │
-│  P1-1: 文档分块策略                                                 │
-│    │                                                               │
-│    └──► P1-3: 混合检索 (依赖BM25索引)                               │
-│                                                                    │
-│  P2-1: 来源可信度评估                                               │
-│                                                                    │
-│  P2-2: 版本管理                                                     │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
-```
+鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?                        浠诲姟渚濊禆鍏崇郴                                 鈹?鈹溾攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?                                                                   鈹?鈹? P0-1: 鍚戦噺鏁版嵁搴撻泦鎴?                                              鈹?鈹?   鈹?                                                              鈹?鈹?   鈹溾攢鈹€鈻?P0-2: RAG妫€绱㈠疄鐜?                                         鈹?鈹?   鈹?        鈹?                                                    鈹?鈹?   鈹?        鈹斺攢鈹€鈻?P1-2: 閲嶆帓搴忔満鍒?                                鈹?鈹?   鈹?                                                              鈹?鈹? P1-1: 鏂囨。鍒嗗潡绛栫暐                                                 鈹?鈹?   鈹?                                                              鈹?鈹?   鈹斺攢鈹€鈻?P1-3: 娣峰悎妫€绱?(渚濊禆BM25绱㈠紩)                               鈹?鈹?                                                                   鈹?鈹? P2-1: 鏉ユ簮鍙俊搴﹁瘎浼?                                              鈹?鈹?                                                                   鈹?鈹? P2-2: 鐗堟湰绠＄悊                                                     鈹?鈹?                                                                   鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?```
 
 ---
 
-## 3. P0级任务详解
+## 3. P0绾т换鍔¤瑙?
+### 3.1 P0-1: 鍚戦噺鏁版嵁搴撻泦鎴?
+#### 3.1.1 闂鎻忚堪
 
-### 3.1 P0-1: 向量数据库集成
+褰撳墠 `KnowledgeManager` 浣跨敤鏈湴JSON鏂囦欢瀛樺偍浜嬪疄锛屽苟鍦ㄥ唴瀛樹腑閬嶅巻鎵€鏈夊悜閲忚绠楃浉浼煎害銆傝繖绉嶆柟寮忓瓨鍦ㄤ互涓嬮棶棰橈細
 
-#### 3.1.1 问题描述
+1. **鎵╁睍鎬у樊**: 鏁版嵁閲忓澶у悗鍐呭瓨鍗犵敤杩囬珮
+2. **妫€绱㈡晥鐜囦綆**: O(n)澶嶆潅搴︼紝姣忔妫€绱㈤渶閬嶅巻鎵€鏈夊悜閲?3. **鎸佷箙鍖栭闄?*: JSON鏂囦欢鎹熷潖浼氬鑷存暟鎹涪澶?4. **鏃犳硶鏀寔楂樼骇鏌ヨ**: 缂轰箯杩囨护銆佽仛鍚堢瓑鍔熻兘
 
-当前 `KnowledgeManager` 使用本地JSON文件存储事实，并在内存中遍历所有向量计算相似度。这种方式存在以下问题：
-
-1. **扩展性差**: 数据量增大后内存占用过高
-2. **检索效率低**: O(n)复杂度，每次检索需遍历所有向量
-3. **持久化风险**: JSON文件损坏会导致数据丢失
-4. **无法支持高级查询**: 缺乏过滤、聚合等功能
-
-#### 3.1.2 可行性分析
-
-| 维度 | 评估 | 说明 |
+#### 3.1.2 鍙鎬у垎鏋?
+| 缁村害 | 璇勪及 | 璇存槑 |
 |-----|-----|-----|
-| 技术可行性 | ✅ 高 | QdrantVectorStore已完整实现 |
-| 资源需求 | ✅ 低 | Qdrant支持Docker部署，资源占用小 |
-| 兼容性 | ✅ 高 | 可通过配置开关切换存储后端 |
-| 风险 | ⚠️ 中 | 需要数据迁移策略 |
+| 鎶€鏈彲琛屾€?| 鉁?楂?| QdrantVectorStore宸插畬鏁村疄鐜?|
+| 璧勬簮闇€姹?| 鉁?浣?| Qdrant鏀寔Docker閮ㄧ讲锛岃祫婧愬崰鐢ㄥ皬 |
+| 鍏煎鎬?| 鉁?楂?| 鍙€氳繃閰嶇疆寮€鍏冲垏鎹㈠瓨鍌ㄥ悗绔?|
+| 椋庨櫓 | 鈿狅笍 涓?| 闇€瑕佹暟鎹縼绉荤瓥鐣?|
 
-#### 3.1.3 最优实现方案
-
-**方案选择**: 适配器模式 + 配置开关
-
+#### 3.1.3 鏈€浼樺疄鐜版柟妗?
+**鏂规閫夋嫨**: 閫傞厤鍣ㄦā寮?+ 閰嶇疆寮€鍏?
 ```python
-# core/knowledge.py 重构方案
+# core/knowledge.py 閲嶆瀯鏂规
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
@@ -132,7 +89,7 @@ from core.vector_store_qdrant import QdrantVectorStore
 from core.config import QdrantConfig
 
 class VectorStoreAdapter(ABC):
-    """向量存储适配器接口"""
+    """鍚戦噺瀛樺偍閫傞厤鍣ㄦ帴鍙?""
     
     @abstractmethod
     async def upsert(self, id: str, vector: List[float], payload: Dict) -> bool:
@@ -152,7 +109,7 @@ class VectorStoreAdapter(ABC):
 
 
 class InMemoryVectorStore(VectorStoreAdapter):
-    """内存向量存储 (当前实现的封装)"""
+    """鍐呭瓨鍚戦噺瀛樺偍 (褰撳墠瀹炵幇鐨勫皝瑁?"""
     
     def __init__(self):
         self._vectors: Dict[str, tuple] = {}  # id -> (vector, payload)
@@ -178,7 +135,7 @@ class InMemoryVectorStore(VectorStoreAdapter):
 
 
 class QdrantAdapter(VectorStoreAdapter):
-    """Qdrant向量存储适配器"""
+    """Qdrant鍚戦噺瀛樺偍閫傞厤鍣?""
     
     def __init__(self, collection_name: str = "knowledge_facts"):
         self.client = QdrantVectorStore(
@@ -205,7 +162,7 @@ class QdrantAdapter(VectorStoreAdapter):
         return [{"id": r[0], "score": r[1], "payload": r[2]} for r in results]
     
     async def delete(self, id: str) -> bool:
-        # Qdrant需要实现delete方法
+        # Qdrant闇€瑕佸疄鐜癲elete鏂规硶
         pass
     
     async def get(self, id: str) -> Optional[Dict]:
@@ -213,7 +170,7 @@ class QdrantAdapter(VectorStoreAdapter):
 
 
 class KnowledgeManager:
-    """重构后的知识管理器"""
+    """閲嶆瀯鍚庣殑鐭ヨ瘑绠＄悊鍣?""
     
     def __init__(
         self,
@@ -223,7 +180,7 @@ class KnowledgeManager:
         self.storage_path = storage_path
         self.embedding_model = EmbeddingModel()
         
-        # 根据配置选择存储后端
+        # 鏍规嵁閰嶇疆閫夋嫨瀛樺偍鍚庣
         if use_qdrant is None:
             use_qdrant = QdrantConfig.USE_QDRANT
         
@@ -242,60 +199,53 @@ class KnowledgeManager:
             self._load()
 ```
 
-#### 3.1.4 实施步骤
+#### 3.1.4 瀹炴柦姝ラ
 
-| 步骤 | 任务 | 预估时间 | 产出物 |
+| 姝ラ | 浠诲姟 | 棰勪及鏃堕棿 | 浜у嚭鐗?|
 |-----|-----|---------|--------|
-| 1 | 创建VectorStoreAdapter抽象类 | 30min | `core/vector_store_adapter.py` |
-| 2 | 实现InMemoryVectorStore | 1h | 封装现有逻辑 |
-| 3 | 实现QdrantAdapter | 1h | 集成QdrantVectorStore |
-| 4 | 重构KnowledgeManager | 2h | 支持后端切换 |
-| 5 | 编写单元测试 | 1h | `tests/test_vector_adapter.py` |
-| 6 | 数据迁移脚本 | 1h | `scripts/migrate_to_qdrant.py` |
+| 1 | 鍒涘缓VectorStoreAdapter鎶借薄绫?| 30min | `core/vector_store_adapter.py` |
+| 2 | 瀹炵幇InMemoryVectorStore | 1h | 灏佽鐜版湁閫昏緫 |
+| 3 | 瀹炵幇QdrantAdapter | 1h | 闆嗘垚QdrantVectorStore |
+| 4 | 閲嶆瀯KnowledgeManager | 2h | 鏀寔鍚庣鍒囨崲 |
+| 5 | 缂栧啓鍗曞厓娴嬭瘯 | 1h | `tests/test_vector_adapter.py` |
+| 6 | 鏁版嵁杩佺Щ鑴氭湰 | 1h | `scripts/migrate_to_qdrant.py` |
 
-#### 3.1.5 验收标准
+#### 3.1.5 楠屾敹鏍囧噯
 
-- [ ] 配置 `USE_QDRANT=true` 时使用Qdrant存储
-- [ ] 配置 `USE_QDRANT=false` 时使用内存存储
-- [ ] 现有测试全部通过
-- [ ] 新增适配器测试覆盖率 > 80%
-- [ ] 支持数据迁移命令
+- [ ] 閰嶇疆 `USE_QDRANT=true` 鏃朵娇鐢≦drant瀛樺偍
+- [ ] 閰嶇疆 `USE_QDRANT=false` 鏃朵娇鐢ㄥ唴瀛樺瓨鍌?- [ ] 鐜版湁娴嬭瘯鍏ㄩ儴閫氳繃
+- [ ] 鏂板閫傞厤鍣ㄦ祴璇曡鐩栫巼 > 80%
+- [ ] 鏀寔鏁版嵁杩佺Щ鍛戒护
 
 ---
 
-### 3.2 P0-2: RAG检索实现
+### 3.2 P0-2: RAG妫€绱㈠疄鐜?
+#### 3.2.1 闂鎻忚堪
 
-#### 3.2.1 问题描述
-
-当前 `writer_async` 函数直接使用 `state["atomic_facts"]` 中的全部事实生成报告，没有根据报告主题进行语义检索。这导致：
-
-1. **上下文窗口浪费**: 不相关的事实占用token
-2. **报告质量下降**: 噪音事实干扰生成
-3. **无法处理大规模数据**: 事实数量超过上下文限制
-
-#### 3.2.2 可行性分析
-
-| 维度 | 评估 | 说明 |
+褰撳墠 `writer_async` 鍑芥暟鐩存帴浣跨敤 `state["atomic_facts"]` 涓殑鍏ㄩ儴浜嬪疄鐢熸垚鎶ュ憡锛屾病鏈夋牴鎹姤鍛婁富棰樿繘琛岃涔夋绱€傝繖瀵艰嚧锛?
+1. **涓婁笅鏂囩獥鍙ｆ氮璐?*: 涓嶇浉鍏崇殑浜嬪疄鍗犵敤token
+2. **鎶ュ憡璐ㄩ噺涓嬮檷**: 鍣煶浜嬪疄骞叉壈鐢熸垚
+3. **鏃犳硶澶勭悊澶ц妯℃暟鎹?*: 浜嬪疄鏁伴噺瓒呰繃涓婁笅鏂囬檺鍒?
+#### 3.2.2 鍙鎬у垎鏋?
+| 缁村害 | 璇勪及 | 璇存槑 |
 |-----|-----|-----|
-| 技术可行性 | ✅ 高 | 检索逻辑已存在于KnowledgeManager |
-| 资源需求 | ✅ 低 | 复用现有embedding和检索 |
-| 兼容性 | ✅ 高 | 对现有流程无破坏性变更 |
-| 风险 | ✅ 低 | 可逐步迁移 |
+| 鎶€鏈彲琛屾€?| 鉁?楂?| 妫€绱㈤€昏緫宸插瓨鍦ㄤ簬KnowledgeManager |
+| 璧勬簮闇€姹?| 鉁?浣?| 澶嶇敤鐜版湁embedding鍜屾绱?|
+| 鍏煎鎬?| 鉁?楂?| 瀵圭幇鏈夋祦绋嬫棤鐮村潖鎬у彉鏇?|
+| 椋庨櫓 | 鉁?浣?| 鍙€愭杩佺Щ |
 
-#### 3.2.3 最优实现方案
-
-**方案选择**: 查询扩展 + 多阶段检索
-
+#### 3.2.3 鏈€浼樺疄鐜版柟妗?
+**鏂规閫夋嫨**: 鏌ヨ鎵╁睍 + 澶氶樁娈垫绱?
 ```python
-# core/rag_retriever.py (新文件)
+# core/rag_retriever.py (鏂版枃浠?
 
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-from core.knowledge import KnowledgeManager, FactStatus
+from core.session_knowledge import KnowledgeManager, FactStatus
 
 @dataclass
 class RetrievedContext:
-    """检索结果上下文"""
+    """妫€绱㈢粨鏋滀笂涓嬫枃"""
     facts: List[Dict[str, Any]]
     total_count: int
     query: str
@@ -303,7 +253,7 @@ class RetrievedContext:
 
 
 class RAGRetriever:
-    """RAG检索器"""
+    """RAG妫€绱㈠櫒"""
     
     def __init__(self, knowledge_manager: KnowledgeManager):
         self.km = knowledge_manager
@@ -316,18 +266,13 @@ class RAGRetriever:
         min_relevance: float = 0.3
     ) -> RetrievedContext:
         """
-        为报告生成检索相关事实
-        
-        策略:
-        1. 使用根查询进行初始检索
-        2. 使用子任务查询进行补充检索
-        3. 合并去重后按相关性排序
-        """
+        涓烘姤鍛婄敓鎴愭绱㈢浉鍏充簨瀹?        
+        绛栫暐:
+        1. 浣跨敤鏍规煡璇㈣繘琛屽垵濮嬫绱?        2. 浣跨敤瀛愪换鍔℃煡璇㈣繘琛岃ˉ鍏呮绱?        3. 鍚堝苟鍘婚噸鍚庢寜鐩稿叧鎬ф帓搴?        """
         all_results = []
         seen_ids = set()
         
-        # 阶段1: 根查询检索
-        root_results = await self.km.search_facts(
+        # 闃舵1: 鏍规煡璇㈡绱?        root_results = await self.km.search_facts(
             query=root_query,
             limit=max_facts // 2,
             status_filter=FactStatus.VERIFIED
@@ -337,11 +282,10 @@ class RAGRetriever:
                 all_results.append(r)
                 seen_ids.add(r["id"])
         
-        # 阶段2: 子任务查询补充检索
-        sub_queries = self._extract_sub_queries(task_tree)
+        # 闃舵2: 瀛愪换鍔℃煡璇㈣ˉ鍏呮绱?        sub_queries = self._extract_sub_queries(task_tree)
         remaining_quota = max_facts - len(all_results)
         
-        for query in sub_queries[:3]:  # 最多使用3个子查询
+        for query in sub_queries[:3]:  # 鏈€澶氫娇鐢?涓瓙鏌ヨ
             if remaining_quota <= 0:
                 break
             
@@ -357,8 +301,7 @@ class RAGRetriever:
                     seen_ids.add(r["id"])
                     remaining_quota -= 1
         
-        # 阶段3: 按相关性排序
-        all_results.sort(key=lambda x: x["score"], reverse=True)
+        # 闃舵3: 鎸夌浉鍏虫€ф帓搴?        all_results.sort(key=lambda x: x["score"], reverse=True)
         
         return RetrievedContext(
             facts=all_results[:max_facts],
@@ -368,7 +311,7 @@ class RAGRetriever:
         )
     
     def _extract_sub_queries(self, task_tree: Dict[str, Any]) -> List[str]:
-        """从任务树提取子查询"""
+        """浠庝换鍔℃爲鎻愬彇瀛愭煡璇?""
         queries = []
         for task_id, task in task_tree.items():
             query = task.get("query", "")
@@ -377,91 +320,81 @@ class RAGRetriever:
         return queries
 
 
-# core/graph.py 修改
+# core/graph.py 淇敼
 
 async def writer_async(state: GraphState) -> GraphState:
-    """使用RAG检索的Writer"""
+    """浣跨敤RAG妫€绱㈢殑Writer"""
     
-    from core.knowledge import KnowledgeManager
+    from core.session_knowledge import KnowledgeManager
     from core.rag_retriever import RAGRetriever
     
-    # 初始化检索器
+    # 鍒濆鍖栨绱㈠櫒
     km = KnowledgeManager()
     retriever = RAGRetriever(km)
     
-    # 获取根查询
-    root_query = ""
+    # 鑾峰彇鏍规煡璇?    root_query = ""
     if state.get("root_task_id"):
         root_task = state["task_tree"].get(state["root_task_id"], {})
         root_query = root_task.get("query", "")
     
-    # RAG检索
-    context = await retriever.retrieve_for_report(
+    # RAG妫€绱?    context = await retriever.retrieve_for_report(
         root_query=root_query,
         task_tree=state["task_tree"],
         max_facts=30
     )
     
-    # 格式化事实
-    facts_text = []
+    # 鏍煎紡鍖栦簨瀹?    facts_text = []
     for i, fact in enumerate(context.facts, 1):
         facts_text.append(
             f"[{fact['id'][:8]}] {fact['text']} "
-            f"(来源: {fact['source_url']}, 相关度: {fact['score']:.2f})"
+            f"(鏉ユ簮: {fact['source_url']}, 鐩稿叧搴? {fact['score']:.2f})"
         )
     
     facts_context = "\n\n".join(facts_text)
     
-    # ... 后续报告生成逻辑
+    # ... 鍚庣画鎶ュ憡鐢熸垚閫昏緫
 ```
 
-#### 3.2.4 实施步骤
+#### 3.2.4 瀹炴柦姝ラ
 
-| 步骤 | 任务 | 预估时间 | 产出物 |
+| 姝ラ | 浠诲姟 | 棰勪及鏃堕棿 | 浜у嚭鐗?|
 |-----|-----|---------|--------|
-| 1 | 创建RAGRetriever类 | 1h | `core/rag_retriever.py` |
-| 2 | 实现多阶段检索策略 | 1.5h | retrieve_for_report方法 |
-| 3 | 修改writer_async | 1h | 集成RAG检索 |
-| 4 | 添加检索日志 | 30min | 便于调试和评估 |
-| 5 | 编写集成测试 | 1h | `tests/test_rag_retriever.py` |
+| 1 | 鍒涘缓RAGRetriever绫?| 1h | `core/rag_retriever.py` |
+| 2 | 瀹炵幇澶氶樁娈垫绱㈢瓥鐣?| 1.5h | retrieve_for_report鏂规硶 |
+| 3 | 淇敼writer_async | 1h | 闆嗘垚RAG妫€绱?|
+| 4 | 娣诲姞妫€绱㈡棩蹇?| 30min | 渚夸簬璋冭瘯鍜岃瘎浼?|
+| 5 | 缂栧啓闆嗘垚娴嬭瘯 | 1h | `tests/test_rag_retriever.py` |
 
-#### 3.2.5 验收标准
+#### 3.2.5 楠屾敹鏍囧噯
 
-- [ ] Writer使用检索到的事实而非全部事实
-- [ ] 检索结果按相关性排序
-- [ ] 支持多阶段检索策略
-- [ ] 检索过程有详细日志
-- [ ] 测试覆盖率 > 80%
+- [ ] Writer浣跨敤妫€绱㈠埌鐨勪簨瀹炶€岄潪鍏ㄩ儴浜嬪疄
+- [ ] 妫€绱㈢粨鏋滄寜鐩稿叧鎬ф帓搴?- [ ] 鏀寔澶氶樁娈垫绱㈢瓥鐣?- [ ] 妫€绱㈣繃绋嬫湁璇︾粏鏃ュ織
+- [ ] 娴嬭瘯瑕嗙洊鐜?> 80%
 
 ---
 
-## 4. P1级任务详解
+## 4. P1绾т换鍔¤瑙?
+### 4.1 P1-1: 鏂囨。鍒嗗潡绛栫暐
 
-### 4.1 P1-1: 文档分块策略
+#### 4.1.1 闂鎻忚堪
 
-#### 4.1.1 问题描述
+褰撳墠 `DistillerAgent` 鐩存帴灏嗘枃妗ｆ埅鏂嚦8000瀛楃锛屽鑷达細
 
-当前 `DistillerAgent` 直接将文档截断至8000字符，导致：
-
-1. **信息丢失**: 超出长度的内容被丢弃
-2. **语义断裂**: 可能在句子中间截断
-3. **提取质量下降**: LLM无法理解不完整的上下文
-
-#### 4.1.2 可行性分析
-
-| 维度 | 评估 | 说明 |
+1. **淇℃伅涓㈠け**: 瓒呭嚭闀垮害鐨勫唴瀹硅涓㈠純
+2. **璇箟鏂**: 鍙兘鍦ㄥ彞瀛愪腑闂存埅鏂?3. **鎻愬彇璐ㄩ噺涓嬮檷**: LLM鏃犳硶鐞嗚В涓嶅畬鏁寸殑涓婁笅鏂?
+#### 4.1.2 鍙鎬у垎鏋?
+| 缁村害 | 璇勪及 | 璇存槑 |
 |-----|-----|-----|
-| 技术可行性 | ✅ 高 | 分块算法成熟 |
-| 资源需求 | ⚠️ 中 | 增加API调用次数 |
-| 兼容性 | ✅ 高 | 对下游透明 |
-| 风险 | ⚠️ 中 | 需要处理跨块事实 |
+| 鎶€鏈彲琛屾€?| 鉁?楂?| 鍒嗗潡绠楁硶鎴愮啛 |
+| 璧勬簮闇€姹?| 鈿狅笍 涓?| 澧炲姞API璋冪敤娆℃暟 |
+| 鍏煎鎬?| 鉁?楂?| 瀵逛笅娓搁€忔槑 |
+| 椋庨櫓 | 鈿狅笍 涓?| 闇€瑕佸鐞嗚法鍧椾簨瀹?|
 
-#### 4.1.3 最优实现方案
-
-**方案选择**: 语义分块 + 滑动窗口
+#### 4.1.3 鏈€浼樺疄鐜版柟妗?
+**鏂规閫夋嫨**: 璇箟鍒嗗潡 + 婊戝姩绐楀彛
 
 ```python
-# core/chunker.py (新文件)
+# core/chunker.py (鏂版枃浠?
 
 import re
 from typing import List, Optional
@@ -469,7 +402,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Chunk:
-    """文档块"""
+    """鏂囨。鍧?""
     text: str
     start_index: int
     end_index: int
@@ -479,7 +412,7 @@ class Chunk:
 
 
 class SemanticChunker:
-    """语义分块器"""
+    """璇箟鍒嗗潡鍣?""
     
     def __init__(
         self,
@@ -493,14 +426,10 @@ class SemanticChunker:
     
     def chunk(self, markdown: str) -> List[Chunk]:
         """
-        语义分块策略:
-        1. 按标题分割文档
-        2. 对每个章节进行段落分割
-        3. 合并小段落，拆分大段落
-        4. 添加重叠窗口
+        璇箟鍒嗗潡绛栫暐:
+        1. 鎸夋爣棰樺垎鍓叉枃妗?        2. 瀵规瘡涓珷鑺傝繘琛屾钀藉垎鍓?        3. 鍚堝苟灏忔钀斤紝鎷嗗垎澶ф钀?        4. 娣诲姞閲嶅彔绐楀彛
         """
-        # 按标题分割
-        sections = self._split_by_headers(markdown)
+        # 鎸夋爣棰樺垎鍓?        sections = self._split_by_headers(markdown)
         
         chunks = []
         current_position = 0
@@ -514,13 +443,13 @@ class SemanticChunker:
             chunks.extend(section_chunks)
             current_position += len(section_text)
         
-        # 添加重叠
+        # 娣诲姞閲嶅彔
         chunks = self._add_overlap(chunks)
         
         return chunks
     
     def _split_by_headers(self, markdown: str) -> List[tuple]:
-        """按标题分割"""
+        """鎸夋爣棰樺垎鍓?""
         header_pattern = r'^(#{1,6})\s+(.+)$'
         lines = markdown.split('\n')
         
@@ -549,7 +478,7 @@ class SemanticChunker:
         section_title: str,
         start_pos: int
     ) -> List[Chunk]:
-        """对章节进行分块"""
+        """瀵圭珷鑺傝繘琛屽垎鍧?""
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         
         chunks = []
@@ -592,7 +521,7 @@ class SemanticChunker:
         return chunks
     
     def _add_overlap(self, chunks: List[Chunk]) -> List[Chunk]:
-        """添加重叠窗口"""
+        """娣诲姞閲嶅彔绐楀彛"""
         if len(chunks) <= 1:
             return chunks
         
@@ -602,13 +531,13 @@ class SemanticChunker:
             prev_chunk = chunks[i - 1]
             curr_chunk = chunks[i]
             
-            # 从前一个块末尾提取重叠文本
+            # 浠庡墠涓€涓潡鏈熬鎻愬彇閲嶅彔鏂囨湰
             overlap_text = self._get_overlap_text(
                 prev_chunk.text,
                 self.overlap_tokens
             )
             
-            # 创建带重叠的新块
+            # 鍒涘缓甯﹂噸鍙犵殑鏂板潡
             new_text = overlap_text + '\n\n' + curr_chunk.text
             overlapped.append(Chunk(
                 text=new_text,
@@ -622,8 +551,8 @@ class SemanticChunker:
         return overlapped
     
     def _get_overlap_text(self, text: str, max_tokens: int) -> str:
-        """获取重叠文本"""
-        sentences = re.split(r'(?<=[。！？.!?])\s*', text)
+        """鑾峰彇閲嶅彔鏂囨湰"""
+        sentences = re.split(r'(?<=[銆傦紒锛?!?])\s*', text)
         
         overlap_sentences = []
         token_count = 0
@@ -638,27 +567,26 @@ class SemanticChunker:
         return ' '.join(overlap_sentences)
     
     def _estimate_tokens(self, text: str) -> int:
-        """估算token数量 (中文约1.5字符/token，英文约4字符/token)"""
+        """浼扮畻token鏁伴噺 (涓枃绾?.5瀛楃/token锛岃嫳鏂囩害4瀛楃/token)"""
         chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
         other_chars = len(text) - chinese_chars
         return int(chinese_chars / 1.5 + other_chars / 4)
 
 
-# agents/distiller.py 修改
+# agents/distiller.py 淇敼
 
 class DistillerAgent:
     
     def __init__(self, ...):
-        # ... 现有初始化
-        self.chunker = SemanticChunker(
+        # ... 鐜版湁鍒濆鍖?        self.chunker = SemanticChunker(
             max_tokens=512,
             overlap_tokens=50
         )
     
     async def distill(self, markdown_text: str, source_url: str, task_id: Optional[str] = None) -> DistillationResult:
-        """使用分块策略提取事实"""
+        """浣跨敤鍒嗗潡绛栫暐鎻愬彇浜嬪疄"""
         
-        # 分块
+        # 鍒嗗潡
         chunks = self.chunker.chunk(markdown_text)
         print(f"[DistillerAgent] Split into {len(chunks)} chunks")
         
@@ -666,12 +594,12 @@ class DistillerAgent:
         seen_fact_texts = set()
         
         for i, chunk in enumerate(chunks):
-            # 对每个块提取事实
+            # 瀵规瘡涓潡鎻愬彇浜嬪疄
             prompt = self._build_prompt(chunk.text)
             response = await self._call_api(prompt)
             chunk_facts = self._parse_facts_from_response(response, source_url, task_id)
             
-            # 去重
+            # 鍘婚噸
             for fact in chunk_facts:
                 normalized = self._normalize_fact_text(fact.text)
                 if normalized not in seen_fact_texts:
@@ -680,7 +608,7 @@ class DistillerAgent:
             
             print(f"[DistillerAgent] Chunk {i+1}/{len(chunks)}: {len(chunk_facts)} facts")
         
-        # 合并相似事实
+        # 鍚堝苟鐩镐技浜嬪疄
         merged_facts = self._merge_similar_facts(all_facts)
         
         return DistillationResult(
@@ -690,66 +618,59 @@ class DistillerAgent:
         )
     
     def _normalize_fact_text(self, text: str) -> str:
-        """标准化事实文本用于去重"""
+        """鏍囧噯鍖栦簨瀹炴枃鏈敤浜庡幓閲?""
         return re.sub(r'\s+', ' ', text.lower().strip())
     
     def _merge_similar_facts(self, facts: List[AtomicFact]) -> List[AtomicFact]:
-        """合并相似事实"""
-        # 简单实现: 按文本长度排序，保留最详细的版本
-        unique_facts = {}
+        """鍚堝苟鐩镐技浜嬪疄"""
+        # 绠€鍗曞疄鐜? 鎸夋枃鏈暱搴︽帓搴忥紝淇濈暀鏈€璇︾粏鐨勭増鏈?        unique_facts = {}
         for fact in facts:
-            key = fact.text[:50]  # 使用前50字符作为key
+            key = fact.text[:50]  # 浣跨敤鍓?0瀛楃浣滀负key
             if key not in unique_facts or len(fact.text) > len(unique_facts[key].text):
                 unique_facts[key] = fact
         return list(unique_facts.values())
 ```
 
-#### 4.1.4 实施步骤
+#### 4.1.4 瀹炴柦姝ラ
 
-| 步骤 | 任务 | 预估时间 | 产出物 |
+| 姝ラ | 浠诲姟 | 棰勪及鏃堕棿 | 浜у嚭鐗?|
 |-----|-----|---------|--------|
-| 1 | 创建SemanticChunker类 | 2h | `core/chunker.py` |
-| 2 | 实现标题分割 | 1h | _split_by_headers方法 |
-| 3 | 实现语义分块 | 1.5h | _chunk_section方法 |
-| 4 | 实现重叠窗口 | 1h | _add_overlap方法 |
-| 5 | 修改DistillerAgent | 1.5h | 集成分块策略 |
-| 6 | 编写测试 | 1h | `tests/test_chunker.py` |
+| 1 | 鍒涘缓SemanticChunker绫?| 2h | `core/chunker.py` |
+| 2 | 瀹炵幇鏍囬鍒嗗壊 | 1h | _split_by_headers鏂规硶 |
+| 3 | 瀹炵幇璇箟鍒嗗潡 | 1.5h | _chunk_section鏂规硶 |
+| 4 | 瀹炵幇閲嶅彔绐楀彛 | 1h | _add_overlap鏂规硶 |
+| 5 | 淇敼DistillerAgent | 1.5h | 闆嗘垚鍒嗗潡绛栫暐 |
+| 6 | 缂栧啓娴嬭瘯 | 1h | `tests/test_chunker.py` |
 
-#### 4.1.5 验收标准
+#### 4.1.5 楠屾敹鏍囧噯
 
-- [ ] 支持按标题分割文档
-- [ ] 支持滑动窗口重叠
-- [ ] 不在句子中间截断
-- [ ] 跨块事实能正确合并
-- [ ] 测试覆盖率 > 80%
+- [ ] 鏀寔鎸夋爣棰樺垎鍓叉枃妗?- [ ] 鏀寔婊戝姩绐楀彛閲嶅彔
+- [ ] 涓嶅湪鍙ュ瓙涓棿鎴柇
+- [ ] 璺ㄥ潡浜嬪疄鑳芥纭悎骞?- [ ] 娴嬭瘯瑕嗙洊鐜?> 80%
 
 ---
 
-### 4.2 P1-2: 重排序机制
+### 4.2 P1-2: 閲嶆帓搴忔満鍒?
+#### 4.2.1 闂鎻忚堪
 
-#### 4.2.1 问题描述
+褰撳墠妫€绱㈢粨鏋滀粎鎸夊悜閲忕浉浼煎害鎺掑簭锛屽彲鑳藉瓨鍦細
 
-当前检索结果仅按向量相似度排序，可能存在：
+1. **璇箟婕傜Щ**: 鍚戦噺鐩镐技浣嗗疄闄呬笉鐩稿叧
+2. **閬楁紡閲嶈缁撴灉**: 鐩稿叧鎬ч珮浣嗗悜閲忚窛绂昏繙
+3. **缂轰箯澶氭牱鎬?*: 缁撴灉杩囦簬闆嗕腑
 
-1. **语义漂移**: 向量相似但实际不相关
-2. **遗漏重要结果**: 相关性高但向量距离远
-3. **缺乏多样性**: 结果过于集中
-
-#### 4.2.2 可行性分析
-
-| 维度 | 评估 | 说明 |
+#### 4.2.2 鍙鎬у垎鏋?
+| 缁村害 | 璇勪及 | 璇存槑 |
 |-----|-----|-----|
-| 技术可行性 | ✅ 高 | 重排序算法成熟 |
-| 资源需求 | ⚠️ 中 | 需要额外LLM调用 |
-| 兼容性 | ✅ 高 | 可插拔实现 |
-| 风险 | ✅ 低 | 不影响现有流程 |
+| 鎶€鏈彲琛屾€?| 鉁?楂?| 閲嶆帓搴忕畻娉曟垚鐔?|
+| 璧勬簮闇€姹?| 鈿狅笍 涓?| 闇€瑕侀澶朙LM璋冪敤 |
+| 鍏煎鎬?| 鉁?楂?| 鍙彃鎷斿疄鐜?|
+| 椋庨櫓 | 鉁?浣?| 涓嶅奖鍝嶇幇鏈夋祦绋?|
 
-#### 4.2.3 最优实现方案
-
-**方案选择**: Cross-Encoder重排序 + 多样性重排
-
+#### 4.2.3 鏈€浼樺疄鐜版柟妗?
+**鏂规閫夋嫨**: Cross-Encoder閲嶆帓搴?+ 澶氭牱鎬ч噸鎺?
 ```python
-# core/reranker.py (新文件)
+# core/reranker.py (鏂版枃浠?
 
 from typing import List, Dict, Any
 from dataclasses import dataclass
@@ -758,7 +679,7 @@ import os
 
 @dataclass
 class RerankResult:
-    """重排序结果"""
+    """閲嶆帓搴忕粨鏋?""
     id: str
     text: str
     original_score: float
@@ -768,7 +689,7 @@ class RerankResult:
 
 
 class LLMReranker:
-    """基于LLM的重排序器"""
+    """鍩轰簬LLM鐨勯噸鎺掑簭鍣?""
     
     def __init__(self, api_key: str = None, model: str = "deepseek-chat"):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
@@ -782,18 +703,16 @@ class LLMReranker:
         top_k: int = 10
     ) -> List[RerankResult]:
         """
-        使用LLM对候选结果重排序
+        浣跨敤LLM瀵瑰€欓€夌粨鏋滈噸鎺掑簭
         
-        策略: 让LLM对每个候选打分
-        """
+        绛栫暐: 璁㎜LM瀵规瘡涓€欓€夋墦鍒?        """
         if not candidates:
             return []
         
-        # 批量打分
+        # 鎵归噺鎵撳垎
         scored_results = []
         
-        for i, candidate in enumerate(candidates[:20]):  # 最多重排20个
-            score = await self._score_relevance(
+        for i, candidate in enumerate(candidates[:20]):  # 鏈€澶氶噸鎺?0涓?            score = await self._score_relevance(
                 query=query,
                 text=candidate.get("text", ""),
                 context=candidate.get("source_url", "")
@@ -804,19 +723,18 @@ class LLMReranker:
                 text=candidate.get("text", ""),
                 original_score=candidate.get("score", 0.0),
                 rerank_score=score,
-                final_score=0.0,  # 后续计算
+                final_score=0.0,  # 鍚庣画璁＄畻
                 payload=candidate
             ))
         
-        # 计算最终分数 (原始分数 + 重排序分数的加权)
+        # 璁＄畻鏈€缁堝垎鏁?(鍘熷鍒嗘暟 + 閲嶆帓搴忓垎鏁扮殑鍔犳潈)
         for result in scored_results:
             result.final_score = (
                 0.3 * result.original_score + 
                 0.7 * result.rerank_score
             )
         
-        # 按最终分数排序
-        scored_results.sort(key=lambda x: x.final_score, reverse=True)
+        # 鎸夋渶缁堝垎鏁版帓搴?        scored_results.sort(key=lambda x: x.final_score, reverse=True)
         
         return scored_results[:top_k]
     
@@ -826,21 +744,17 @@ class LLMReranker:
         text: str,
         context: str = ""
     ) -> float:
-        """使用LLM对单个文档打分"""
+        """浣跨敤LLM瀵瑰崟涓枃妗ｆ墦鍒?""
         
-        prompt = f"""请判断以下内容与查询的相关性，并给出0.0到1.0的分数。
+        prompt = f"""璇峰垽鏂互涓嬪唴瀹逛笌鏌ヨ鐨勭浉鍏虫€э紝骞剁粰鍑?.0鍒?.0鐨勫垎鏁般€?
+鏌ヨ: {query}
 
-查询: {query}
+鍐呭: {text[:500]}
 
-内容: {text[:500]}
-
-评分标准:
-- 1.0: 内容直接回答查询，包含关键信息
-- 0.7: 内容与查询相关，提供有用背景
-- 0.4: 内容间接相关，可能有用
-- 0.0: 内容与查询无关
-
-请只返回一个数字分数，不要有其他文字:"""
+璇勫垎鏍囧噯:
+- 1.0: 鍐呭鐩存帴鍥炵瓟鏌ヨ锛屽寘鍚叧閿俊鎭?- 0.7: 鍐呭涓庢煡璇㈢浉鍏筹紝鎻愪緵鏈夌敤鑳屾櫙
+- 0.4: 鍐呭闂存帴鐩稿叧锛屽彲鑳芥湁鐢?- 0.0: 鍐呭涓庢煡璇㈡棤鍏?
+璇峰彧杩斿洖涓€涓暟瀛楀垎鏁帮紝涓嶈鏈夊叾浠栨枃瀛?"""
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -870,7 +784,7 @@ class LLMReranker:
 
 
 class DiversityReranker:
-    """多样性重排序器"""
+    """澶氭牱鎬ч噸鎺掑簭鍣?""
     
     def __init__(self, diversity_threshold: float = 0.8):
         self.diversity_threshold = diversity_threshold
@@ -881,27 +795,25 @@ class DiversityReranker:
         embeddings: List[List[float]] = None
     ) -> List[RerankResult]:
         """
-        多样性重排序 (MMR算法)
+        澶氭牱鎬ч噸鎺掑簭 (MMR绠楁硶)
         
-        确保结果多样性，避免过于相似的结果
-        """
+        纭繚缁撴灉澶氭牱鎬э紝閬垮厤杩囦簬鐩镐技鐨勭粨鏋?        """
         if not candidates or len(candidates) <= 1:
             return candidates
         
-        selected = [candidates[0]]  # 选择最高分的
-        remaining = candidates[1:]
+        selected = [candidates[0]]  # 閫夋嫨鏈€楂樺垎鐨?        remaining = candidates[1:]
         
         while remaining and len(selected) < len(candidates):
             best_candidate = None
             best_score = -1
             
             for candidate in remaining:
-                # 计算与已选结果的最大相似度
+                # 璁＄畻涓庡凡閫夌粨鏋滅殑鏈€澶х浉浼煎害
                 max_sim = self._max_similarity_to_selected(
                     candidate, selected, embeddings
                 )
                 
-                # MMR分数 = 相关性 - λ * 最大相似度
+                # MMR鍒嗘暟 = 鐩稿叧鎬?- 位 * 鏈€澶х浉浼煎害
                 mmr_score = 0.7 * candidate.final_score - 0.3 * max_sim
                 
                 if mmr_score > best_score:
@@ -920,8 +832,8 @@ class DiversityReranker:
         selected: List[RerankResult],
         embeddings: List[List[float]] = None
     ) -> float:
-        """计算候选与已选结果的最大相似度"""
-        # 简化实现: 基于文本重叠
+        """璁＄畻鍊欓€変笌宸查€夌粨鏋滅殑鏈€澶х浉浼煎害"""
+        # 绠€鍖栧疄鐜? 鍩轰簬鏂囨湰閲嶅彔
         max_sim = 0.0
         candidate_words = set(candidate.text.lower().split())
         
@@ -935,7 +847,7 @@ class DiversityReranker:
         return max_sim
 
 
-# core/rag_retriever.py 修改
+# core/rag_retriever.py 淇敼
 
 class RAGRetriever:
     
@@ -945,18 +857,16 @@ class RAGRetriever:
         self.diversity_reranker = DiversityReranker()
     
     async def retrieve_for_report(self, ...) -> RetrievedContext:
-        # ... 现有检索逻辑
+        # ... 鐜版湁妫€绱㈤€昏緫
         
-        # 重排序
-        if self.llm_reranker:
+        # 閲嶆帓搴?        if self.llm_reranker:
             reranked = await self.llm_reranker.rerank(
                 query=root_query,
                 candidates=all_results,
                 top_k=max_facts
             )
             
-            # 多样性重排
-            final_results = self.diversity_reranker.rerank(reranked)
+            # 澶氭牱鎬ч噸鎺?            final_results = self.diversity_reranker.rerank(reranked)
             
             all_results = [
                 {
@@ -969,54 +879,48 @@ class RAGRetriever:
                 for r in final_results
             ]
         
-        # ... 返回结果
+        # ... 杩斿洖缁撴灉
 ```
 
-#### 4.2.4 实施步骤
+#### 4.2.4 瀹炴柦姝ラ
 
-| 步骤 | 任务 | 预估时间 | 产出物 |
+| 姝ラ | 浠诲姟 | 棰勪及鏃堕棿 | 浜у嚭鐗?|
 |-----|-----|---------|--------|
-| 1 | 创建LLMReranker类 | 1.5h | `core/reranker.py` |
-| 2 | 实现相关性打分 | 1h | _score_relevance方法 |
-| 3 | 创建DiversityReranker | 1h | MMR算法实现 |
-| 4 | 集成到RAGRetriever | 1h | 修改retrieve_for_report |
-| 5 | 编写测试 | 1h | `tests/test_reranker.py` |
+| 1 | 鍒涘缓LLMReranker绫?| 1.5h | `core/reranker.py` |
+| 2 | 瀹炵幇鐩稿叧鎬ф墦鍒?| 1h | _score_relevance鏂规硶 |
+| 3 | 鍒涘缓DiversityReranker | 1h | MMR绠楁硶瀹炵幇 |
+| 4 | 闆嗘垚鍒癛AGRetriever | 1h | 淇敼retrieve_for_report |
+| 5 | 缂栧啓娴嬭瘯 | 1h | `tests/test_reranker.py` |
 
-#### 4.2.5 验收标准
+#### 4.2.5 楠屾敹鏍囧噯
 
-- [ ] LLM重排序能提升检索相关性
-- [ ] 多样性重排能减少重复结果
-- [ ] 重排序过程有详细日志
-- [ ] 支持配置开关控制是否启用
-- [ ] 测试覆盖率 > 80%
+- [ ] LLM閲嶆帓搴忚兘鎻愬崌妫€绱㈢浉鍏虫€?- [ ] 澶氭牱鎬ч噸鎺掕兘鍑忓皯閲嶅缁撴灉
+- [ ] 閲嶆帓搴忚繃绋嬫湁璇︾粏鏃ュ織
+- [ ] 鏀寔閰嶇疆寮€鍏虫帶鍒舵槸鍚﹀惎鐢?- [ ] 娴嬭瘯瑕嗙洊鐜?> 80%
 
 ---
 
-### 4.3 P1-3: 混合检索
+### 4.3 P1-3: 娣峰悎妫€绱?
+#### 4.3.1 闂鎻忚堪
 
-#### 4.3.1 问题描述
+褰撳墠浠呬娇鐢ㄥ悜閲忔绱紝瀛樺湪浠ヤ笅闂锛?
+1. **绮剧‘鍖归厤澶辨晥**: 鍚戦噺妫€绱㈠鍏抽敭璇嶅尮閰嶄笉鏁忔劅
+2. **涓撲笟鏈妫€绱㈠樊**: 宓屽叆妯″瀷鍙兘鏃犳硶鐞嗚В涓撲笟鏈
+3. **鍙洖鐜囧彈闄?*: 鍗曚竴妫€绱㈡柟寮忚鐩栭潰鏈夐檺
 
-当前仅使用向量检索，存在以下问题：
-
-1. **精确匹配失效**: 向量检索对关键词匹配不敏感
-2. **专业术语检索差**: 嵌入模型可能无法理解专业术语
-3. **召回率受限**: 单一检索方式覆盖面有限
-
-#### 4.3.2 可行性分析
-
-| 维度 | 评估 | 说明 |
+#### 4.3.2 鍙鎬у垎鏋?
+| 缁村害 | 璇勪及 | 璇存槑 |
 |-----|-----|-----|
-| 技术可行性 | ✅ 高 | BM25算法成熟，有现成库 |
-| 资源需求 | ⚠️ 中 | 需要维护倒排索引 |
-| 兼容性 | ✅ 高 | 可与向量检索并行 |
-| 风险 | ✅ 低 | 不影响现有流程 |
+| 鎶€鏈彲琛屾€?| 鉁?楂?| BM25绠楁硶鎴愮啛锛屾湁鐜版垚搴?|
+| 璧勬簮闇€姹?| 鈿狅笍 涓?| 闇€瑕佺淮鎶ゅ€掓帓绱㈠紩 |
+| 鍏煎鎬?| 鉁?楂?| 鍙笌鍚戦噺妫€绱㈠苟琛?|
+| 椋庨櫓 | 鉁?浣?| 涓嶅奖鍝嶇幇鏈夋祦绋?|
 
-#### 4.3.3 最优实现方案
-
-**方案选择**: BM25 + 向量检索 + RRF融合
+#### 4.3.3 鏈€浼樺疄鐜版柟妗?
+**鏂规閫夋嫨**: BM25 + 鍚戦噺妫€绱?+ RRF铻嶅悎
 
 ```python
-# core/hybrid_retriever.py (新文件)
+# core/hybrid_retriever.py (鏂版枃浠?
 
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
@@ -1034,7 +938,7 @@ class HybridSearchResult:
 
 
 class BM25Index:
-    """BM25倒排索引"""
+    """BM25鍊掓帓绱㈠紩"""
     
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
@@ -1046,7 +950,7 @@ class BM25Index:
         self.idf_cache: Dict[str, float] = {}
     
     def index(self, documents: List[Dict[str, Any]]):
-        """构建索引"""
+        """鏋勫缓绱㈠紩"""
         self.doc_count = len(documents)
         total_length = 0
         
@@ -1058,7 +962,7 @@ class BM25Index:
             self.doc_lengths[doc_id] = len(tokens)
             total_length += len(tokens)
             
-            # 构建倒排索引
+            # 鏋勫缓鍊掓帓绱㈠紩
             term_freq = Counter(tokens)
             for term, freq in term_freq.items():
                 if term not in self.inverted_index:
@@ -1068,7 +972,7 @@ class BM25Index:
         self.avg_doc_length = total_length / self.doc_count if self.doc_count > 0 else 0
     
     def search(self, query: str, top_k: int = 10) -> List[Tuple[str, float]]:
-        """BM25搜索"""
+        """BM25鎼滅储"""
         query_tokens = self._tokenize(query)
         scores: Dict[str, float] = {}
         
@@ -1081,7 +985,7 @@ class BM25Index:
             for doc_id, tf in self.inverted_index[term].items():
                 doc_length = self.doc_lengths.get(doc_id, 0)
                 
-                # BM25公式
+                # BM25鍏紡
                 numerator = tf * (self.k1 + 1)
                 denominator = tf + self.k1 * (1 - self.b + self.b * doc_length / self.avg_doc_length)
                 score = idf * numerator / denominator
@@ -1090,12 +994,12 @@ class BM25Index:
                     scores[doc_id] = 0.0
                 scores[doc_id] += score
         
-        # 排序
+        # 鎺掑簭
         sorted_results = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return sorted_results[:top_k]
     
     def _compute_idf(self, term: str) -> float:
-        """计算IDF"""
+        """璁＄畻IDF"""
         if term in self.idf_cache:
             return self.idf_cache[term]
         
@@ -1106,10 +1010,9 @@ class BM25Index:
         return idf
     
     def _tokenize(self, text: str) -> List[str]:
-        """分词 (简单实现)"""
+        """鍒嗚瘝 (绠€鍗曞疄鐜?"""
         import re
-        # 中文按字符分割，英文按空格分割
-        chinese = re.findall(r'[\u4e00-\u9fff]+', text)
+        # 涓枃鎸夊瓧绗﹀垎鍓诧紝鑻辨枃鎸夌┖鏍煎垎鍓?        chinese = re.findall(r'[\u4e00-\u9fff]+', text)
         english = re.findall(r'[a-zA-Z]+', text)
         
         tokens = []
@@ -1122,7 +1025,7 @@ class BM25Index:
 
 
 class HybridRetriever:
-    """混合检索器"""
+    """娣峰悎妫€绱㈠櫒"""
     
     def __init__(
         self,
@@ -1137,9 +1040,8 @@ class HybridRetriever:
         self._indexed = False
     
     async def build_index(self):
-        """构建混合索引"""
-        # 获取所有文档
-        all_facts = await self.km.search_facts("", limit=1000, threshold=0.0)
+        """鏋勫缓娣峰悎绱㈠紩"""
+        # 鑾峰彇鎵€鏈夋枃妗?        all_facts = await self.km.search_facts("", limit=1000, threshold=0.0)
         
         if all_facts:
             self.bm25_index.index(all_facts)
@@ -1153,32 +1055,27 @@ class HybridRetriever:
         threshold: float = 0.0
     ) -> List[HybridSearchResult]:
         """
-        混合检索
-        
-        1. 向量检索
-        2. BM25检索
-        3. RRF融合
+        娣峰悎妫€绱?        
+        1. 鍚戦噺妫€绱?        2. BM25妫€绱?        3. RRF铻嶅悎
         """
         if not self._indexed:
             await self.build_index()
         
-        # 向量检索
-        vector_results = await self.km.search_facts(
+        # 鍚戦噺妫€绱?        vector_results = await self.km.search_facts(
             query=query,
             limit=top_k * 2,
             threshold=0.0
         )
         vector_ranking = {r["id"]: i for i, r in enumerate(vector_results)}
         
-        # BM25检索
-        bm25_results = self.bm25_index.search(query, top_k * 2)
+        # BM25妫€绱?        bm25_results = self.bm25_index.search(query, top_k * 2)
         bm25_ranking = {r[0]: i for i, r in enumerate(bm25_results)}
         
-        # RRF融合
+        # RRF铻嶅悎
         all_doc_ids = set(vector_ranking.keys()) | set(bm25_ranking.keys())
         rrf_scores = {}
         
-        k = 60  # RRF参数
+        k = 60  # RRF鍙傛暟
         for doc_id in all_doc_ids:
             vector_rank = vector_ranking.get(doc_id, len(vector_ranking))
             bm25_rank = bm25_ranking.get(doc_id, len(bm25_ranking))
@@ -1186,12 +1083,11 @@ class HybridRetriever:
             rrf_score = 1 / (k + vector_rank) + 1 / (k + bm25_rank)
             rrf_scores[doc_id] = rrf_score
         
-        # 排序并构建结果
-        sorted_ids = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+        # 鎺掑簭骞舵瀯寤虹粨鏋?        sorted_ids = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
         
         results = []
         for doc_id, combined_score in sorted_ids[:top_k]:
-            # 获取文档详情
+            # 鑾峰彇鏂囨。璇︽儏
             doc = await self.km.get_fact_by_id(doc_id)
             if doc:
                 results.append(HybridSearchResult(
@@ -1206,44 +1102,37 @@ class HybridRetriever:
         return results
 
 
-# RRF (Reciprocal Rank Fusion) 算法说明:
-# score(d) = Σ 1/(k + rank(d))
-# 其中 k 是平滑参数，通常取 60
+# RRF (Reciprocal Rank Fusion) 绠楁硶璇存槑:
+# score(d) = 危 1/(k + rank(d))
+# 鍏朵腑 k 鏄钩婊戝弬鏁帮紝閫氬父鍙?60
 ```
 
-#### 4.3.4 实施步骤
+#### 4.3.4 瀹炴柦姝ラ
 
-| 步骤 | 任务 | 预估时间 | 产出物 |
+| 姝ラ | 浠诲姟 | 棰勪及鏃堕棿 | 浜у嚭鐗?|
 |-----|-----|---------|--------|
-| 1 | 创建BM25Index类 | 2h | `core/hybrid_retriever.py` |
-| 2 | 实现倒排索引构建 | 1h | index方法 |
-| 3 | 实现BM25搜索 | 1.5h | search方法 |
-| 4 | 创建HybridRetriever | 1.5h | RRF融合 |
-| 5 | 集成到RAGRetriever | 1h | 修改检索流程 |
-| 6 | 编写测试 | 1h | `tests/test_hybrid_retriever.py` |
+| 1 | 鍒涘缓BM25Index绫?| 2h | `core/hybrid_retriever.py` |
+| 2 | 瀹炵幇鍊掓帓绱㈠紩鏋勫缓 | 1h | index鏂规硶 |
+| 3 | 瀹炵幇BM25鎼滅储 | 1.5h | search鏂规硶 |
+| 4 | 鍒涘缓HybridRetriever | 1.5h | RRF铻嶅悎 |
+| 5 | 闆嗘垚鍒癛AGRetriever | 1h | 淇敼妫€绱㈡祦绋?|
+| 6 | 缂栧啓娴嬭瘯 | 1h | `tests/test_hybrid_retriever.py` |
 
-#### 4.3.5 验收标准
+#### 4.3.5 楠屾敹鏍囧噯
 
-- [ ] BM25索引能正确构建
-- [ ] 关键词检索能召回精确匹配结果
-- [ ] RRF融合能综合两种检索结果
-- [ ] 混合检索召回率高于单一检索
-- [ ] 测试覆盖率 > 80%
+- [ ] BM25绱㈠紩鑳芥纭瀯寤?- [ ] 鍏抽敭璇嶆绱㈣兘鍙洖绮剧‘鍖归厤缁撴灉
+- [ ] RRF铻嶅悎鑳界患鍚堜袱绉嶆绱㈢粨鏋?- [ ] 娣峰悎妫€绱㈠彫鍥炵巼楂樹簬鍗曚竴妫€绱?- [ ] 娴嬭瘯瑕嗙洊鐜?> 80%
 
 ---
 
-## 5. P2级任务详解
+## 5. P2绾т换鍔¤瑙?
+### 5.1 P2-1: 鏉ユ簮鍙俊搴﹁瘎浼?
+#### 5.1.1 闂鎻忚堪
 
-### 5.1 P2-1: 来源可信度评估
-
-#### 5.1.1 问题描述
-
-当前事实的 `confidence` 仅由 LLM 主观判断，缺乏客观评估标准。
-
-#### 5.1.2 最优实现方案
-
+褰撳墠浜嬪疄鐨?`confidence` 浠呯敱 LLM 涓昏鍒ゆ柇锛岀己涔忓瑙傝瘎浼版爣鍑嗐€?
+#### 5.1.2 鏈€浼樺疄鐜版柟妗?
 ```python
-# core/credibility.py (新文件)
+# core/credibility.py (鏂版枃浠?
 
 from typing import Dict, List
 from dataclasses import dataclass
@@ -1260,26 +1149,26 @@ class CredibilityScore:
 
 
 class SourceCredibilityScorer:
-    """来源可信度评估器"""
+    """鏉ユ簮鍙俊搴﹁瘎浼板櫒"""
     
     TRUSTED_DOMAINS = {
-        # 政府机构
+        # 鏀垮簻鏈烘瀯
         "gov.cn": 0.95,
         "gov.uk": 0.95,
         "gov": 0.90,
-        # 教育机构
+        # 鏁欒偛鏈烘瀯
         "edu.cn": 0.90,
         "edu": 0.85,
-        # 新闻机构
+        # 鏂伴椈鏈烘瀯
         "reuters.com": 0.85,
         "bloomberg.com": 0.85,
         "ft.com": 0.85,
         "wsj.com": 0.80,
-        # 学术
+        # 瀛︽湳
         "arxiv.org": 0.80,
         "nature.com": 0.90,
         "science.org": 0.90,
-        # 科技公司
+        # 绉戞妧鍏徃
         "openai.com": 0.75,
         "deepmind.com": 0.75,
     }
@@ -1292,14 +1181,14 @@ class SourceCredibilityScorer:
     }
     
     def score(self, source_url: str, content: str, published_date: str = None) -> CredibilityScore:
-        """评估来源可信度"""
+        """璇勪及鏉ユ簮鍙俊搴?""
         
         domain_score = self._score_domain(source_url)
         content_score = self._score_content(content)
         citation_score = self._score_citations(content)
         freshness_score = self._score_freshness(published_date)
         
-        # 加权综合分数
+        # 鍔犳潈缁煎悎鍒嗘暟
         overall = (
             0.35 * domain_score +
             0.25 * content_score +
@@ -1321,7 +1210,7 @@ class SourceCredibilityScorer:
         )
     
     def _score_domain(self, url: str) -> float:
-        """评估域名可信度"""
+        """璇勪及鍩熷悕鍙俊搴?""
         domain = self._extract_domain(url)
         
         for trusted, score in self.TRUSTED_DOMAINS.items():
@@ -1332,43 +1221,40 @@ class SourceCredibilityScorer:
             if suspicious in domain:
                 return score
         
-        return 0.60  # 默认分数
+        return 0.60  # 榛樿鍒嗘暟
     
     def _score_content(self, content: str) -> float:
-        """评估内容质量"""
+        """璇勪及鍐呭璐ㄩ噺"""
         score = 0.5
         
-        # 有数值数据
-        if self._has_numerical_data(content):
+        # 鏈夋暟鍊兼暟鎹?        if self._has_numerical_data(content):
             score += 0.15
         
-        # 有专业术语
-        if self._has_technical_terms(content):
+        # 鏈変笓涓氭湳璇?        if self._has_technical_terms(content):
             score += 0.10
         
-        # 内容长度适中
+        # 鍐呭闀垮害閫備腑
         if 200 < len(content) < 5000:
             score += 0.10
         
-        # 有结构化内容
+        # 鏈夌粨鏋勫寲鍐呭
         if "##" in content or "1." in content:
             score += 0.10
         
-        # 无明显广告
-        if not self._has_ads(content):
+        # 鏃犳槑鏄惧箍鍛?        if not self._has_ads(content):
             score += 0.05
         
         return min(1.0, score)
     
     def _score_citations(self, content: str) -> float:
-        """评估引用质量"""
-        # 检查是否有引用标记
+        """璇勪及寮曠敤璐ㄩ噺"""
+        # 妫€鏌ユ槸鍚︽湁寮曠敤鏍囪
         citation_patterns = [
             r'\[\d+\]',  # [1], [2]
             r'\(.*?\d{4}.*?\)',  # (Author, 2023)
-            r'根据.*?报告',
-            r'数据显示',
-            r'来源:',
+            r'鏍规嵁.*?鎶ュ憡',
+            r'鏁版嵁鏄剧ず',
+            r'鏉ユ簮:',
         ]
         
         citation_count = 0
@@ -1383,7 +1269,7 @@ class SourceCredibilityScorer:
             return 0.40
     
     def _score_freshness(self, published_date: str) -> float:
-        """评估时效性"""
+        """璇勪及鏃舵晥鎬?""
         if not published_date:
             return 0.50
         
@@ -1405,48 +1291,46 @@ class SourceCredibilityScorer:
             return 0.50
     
     def _extract_domain(self, url: str) -> str:
-        """提取域名"""
+        """鎻愬彇鍩熷悕"""
         import re
         match = re.search(r'://([^/]+)', url)
         return match.group(1) if match else ""
     
     def _has_numerical_data(self, content: str) -> bool:
-        """检查是否有数值数据"""
-        numbers = re.findall(r'\d+\.?\d*[%亿万美元]?', content)
+        """妫€鏌ユ槸鍚︽湁鏁板€兼暟鎹?""
+        numbers = re.findall(r'\d+\.?\d*[%浜夸竾缇庡厓]?', content)
         return len(numbers) >= 3
     
     def _has_technical_terms(self, content: str) -> bool:
-        """检查是否有专业术语"""
-        terms = ['纳米', '制程', 'GAA', 'FinFET', 'EUV', 'AI', 'GPU', 'CPU']
+        """妫€鏌ユ槸鍚︽湁涓撲笟鏈"""
+        terms = ['绾崇背', '鍒剁▼', 'GAA', 'FinFET', 'EUV', 'AI', 'GPU', 'CPU']
         return any(term in content for term in terms)
     
     def _has_ads(self, content: str) -> bool:
-        """检查是否有广告"""
-        ad_patterns = ['广告', '赞助', '推广', 'advertisement']
+        """妫€鏌ユ槸鍚︽湁骞垮憡"""
+        ad_patterns = ['骞垮憡', '璧炲姪', '鎺ㄥ箍', 'advertisement']
         return any(ad in content.lower() for ad in ad_patterns)
 ```
 
-#### 5.1.3 实施步骤
+#### 5.1.3 瀹炴柦姝ラ
 
-| 步骤 | 任务 | 预估时间 |
+| 姝ラ | 浠诲姟 | 棰勪及鏃堕棿 |
 |-----|-----|---------|
-| 1 | 创建SourceCredibilityScorer | 1.5h |
-| 2 | 集成到DistillerAgent | 1h |
-| 3 | 更新confidence计算逻辑 | 1h |
-| 4 | 编写测试 | 1h |
+| 1 | 鍒涘缓SourceCredibilityScorer | 1.5h |
+| 2 | 闆嗘垚鍒癉istillerAgent | 1h |
+| 3 | 鏇存柊confidence璁＄畻閫昏緫 | 1h |
+| 4 | 缂栧啓娴嬭瘯 | 1h |
 
 ---
 
-### 5.2 P2-2: 版本管理
+### 5.2 P2-2: 鐗堟湰绠＄悊
 
-#### 5.2.1 问题描述
+#### 5.2.1 闂鎻忚堪
 
-事实没有版本历史，无法追溯变更，无法回滚。
-
-#### 5.2.2 最优实现方案
-
+浜嬪疄娌℃湁鐗堟湰鍘嗗彶锛屾棤娉曡拷婧彉鏇达紝鏃犳硶鍥炴粴銆?
+#### 5.2.2 鏈€浼樺疄鐜版柟妗?
 ```python
-# core/version_manager.py (新文件)
+# core/version_manager.py (鏂版枃浠?
 
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -1465,7 +1349,7 @@ class FactVersion:
 
 
 class FactVersionManager:
-    """事实版本管理器"""
+    """浜嬪疄鐗堟湰绠＄悊鍣?""
     
     def __init__(self, storage_path: str = "./fact_versions"):
         self.storage_path = storage_path
@@ -1479,7 +1363,7 @@ class FactVersionManager:
         source_url: str,
         reason: str = "initial"
     ) -> FactVersion:
-        """创建新版本"""
+        """鍒涘缓鏂扮増鏈?""
         existing = self._versions.get(fact_id, [])
         
         new_version = FactVersion(
@@ -1499,7 +1383,7 @@ class FactVersionManager:
         return new_version
     
     def get_version(self, fact_id: str, version: int = None) -> Optional[FactVersion]:
-        """获取指定版本"""
+        """鑾峰彇鎸囧畾鐗堟湰"""
         versions = self._versions.get(fact_id, [])
         if not versions:
             return None
@@ -1513,15 +1397,14 @@ class FactVersionManager:
         return None
     
     def get_history(self, fact_id: str) -> List[FactVersion]:
-        """获取版本历史"""
+        """鑾峰彇鐗堟湰鍘嗗彶"""
         return self._versions.get(fact_id, [])
     
     def rollback(self, fact_id: str, target_version: int) -> Optional[FactVersion]:
-        """回滚到指定版本"""
+        """鍥炴粴鍒版寚瀹氱増鏈?""
         target = self.get_version(fact_id, target_version)
         if target:
-            # 创建一个新版本，内容是目标版本的内容
-            return self.create_version(
+            # 鍒涘缓涓€涓柊鐗堟湰锛屽唴瀹规槸鐩爣鐗堟湰鐨勫唴瀹?            return self.create_version(
                 fact_id=fact_id,
                 text=target.text,
                 confidence=target.confidence,
@@ -1531,170 +1414,129 @@ class FactVersionManager:
         return None
 ```
 
-#### 5.2.3 实施步骤
+#### 5.2.3 瀹炴柦姝ラ
 
-| 步骤 | 任务 | 预估时间 |
+| 姝ラ | 浠诲姟 | 棰勪及鏃堕棿 |
 |-----|-----|---------|
-| 1 | 创建FactVersionManager | 1.5h |
-| 2 | 集成到KnowledgeManager | 1h |
-| 3 | 添加版本历史API | 1h |
-| 4 | 编写测试 | 1h |
+| 1 | 鍒涘缓FactVersionManager | 1.5h |
+| 2 | 闆嗘垚鍒癒nowledgeManager | 1h |
+| 3 | 娣诲姞鐗堟湰鍘嗗彶API | 1h |
+| 4 | 缂栧啓娴嬭瘯 | 1h |
 
 ---
 
-## 6. 实施路线图
-
-### 6.1 阶段划分
+## 6. 瀹炴柦璺嚎鍥?
+### 6.1 闃舵鍒掑垎
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         实施路线图                                    │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  阶段1: 基础设施 (P0) ─────────────────────────────────────────────  │
-│  │                                                                  │
-│  ├── P0-1: 向量数据库集成                                           │
-│  │   └── 产出: VectorStoreAdapter, KnowledgeManager重构             │
-│  │                                                                  │
-│  └── P0-2: RAG检索实现                                              │
-│      └── 产出: RAGRetriever, Writer改造                             │
-│                                                                     │
-│  阶段2: 效果提升 (P1) ─────────────────────────────────────────────  │
-│  │                                                                  │
-│  ├── P1-1: 文档分块策略                                             │
-│  │   └── 产出: SemanticChunker, DistillerAgent改造                  │
-│  │                                                                  │
-│  ├── P1-2: 重排序机制                                               │
-│  │   └── 产出: LLMReranker, DiversityReranker                       │
-│  │                                                                  │
-│  └── P1-3: 混合检索                                                 │
-│      └── 产出: BM25Index, HybridRetriever                           │
-│                                                                     │
-│  阶段3: 质量保障 (P2) ─────────────────────────────────────────────  │
-│  │                                                                  │
-│  ├── P2-1: 来源可信度评估                                           │
-│  │   └── 产出: SourceCredibilityScorer                              │
-│  │                                                                  │
-│  └── P2-2: 版本管理                                                 │
-│      └── 产出: FactVersionManager                                   │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?                        瀹炴柦璺嚎鍥?                                   鈹?鈹溾攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?                                                                    鈹?鈹? 闃舵1: 鍩虹璁炬柦 (P0) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€  鈹?鈹? 鈹?                                                                 鈹?鈹? 鈹溾攢鈹€ P0-1: 鍚戦噺鏁版嵁搴撻泦鎴?                                          鈹?鈹? 鈹?  鈹斺攢鈹€ 浜у嚭: VectorStoreAdapter, KnowledgeManager閲嶆瀯             鈹?鈹? 鈹?                                                                 鈹?鈹? 鈹斺攢鈹€ P0-2: RAG妫€绱㈠疄鐜?                                             鈹?鈹?     鈹斺攢鈹€ 浜у嚭: RAGRetriever, Writer鏀归€?                            鈹?鈹?                                                                    鈹?鈹? 闃舵2: 鏁堟灉鎻愬崌 (P1) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€  鈹?鈹? 鈹?                                                                 鈹?鈹? 鈹溾攢鈹€ P1-1: 鏂囨。鍒嗗潡绛栫暐                                             鈹?鈹? 鈹?  鈹斺攢鈹€ 浜у嚭: SemanticChunker, DistillerAgent鏀归€?                 鈹?鈹? 鈹?                                                                 鈹?鈹? 鈹溾攢鈹€ P1-2: 閲嶆帓搴忔満鍒?                                              鈹?鈹? 鈹?  鈹斺攢鈹€ 浜у嚭: LLMReranker, DiversityReranker                       鈹?鈹? 鈹?                                                                 鈹?鈹? 鈹斺攢鈹€ P1-3: 娣峰悎妫€绱?                                                鈹?鈹?     鈹斺攢鈹€ 浜у嚭: BM25Index, HybridRetriever                           鈹?鈹?                                                                    鈹?鈹? 闃舵3: 璐ㄩ噺淇濋殰 (P2) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€  鈹?鈹? 鈹?                                                                 鈹?鈹? 鈹溾攢鈹€ P2-1: 鏉ユ簮鍙俊搴﹁瘎浼?                                          鈹?鈹? 鈹?  鈹斺攢鈹€ 浜у嚭: SourceCredibilityScorer                              鈹?鈹? 鈹?                                                                 鈹?鈹? 鈹斺攢鈹€ P2-2: 鐗堟湰绠＄悊                                                 鈹?鈹?     鈹斺攢鈹€ 浜у嚭: FactVersionManager                                   鈹?鈹?                                                                    鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?```
 
-### 6.2 时间规划
+### 6.2 鏃堕棿瑙勫垝
 
-| 阶段 | 任务 | 预估时间 | 依赖 |
+| 闃舵 | 浠诲姟 | 棰勪及鏃堕棿 | 渚濊禆 |
 |-----|-----|---------|-----|
-| **阶段1** | P0-1 向量数据库集成 | 6.5h | 无 |
-| | P0-2 RAG检索实现 | 5h | P0-1 |
-| **阶段2** | P1-1 文档分块策略 | 8h | 无 |
-| | P1-2 重排序机制 | 5.5h | P0-2 |
-| | P1-3 混合检索 | 8h | P0-1 |
-| **阶段3** | P2-1 来源可信度评估 | 4.5h | 无 |
-| | P2-2 版本管理 | 4.5h | 无 |
-| **总计** | | **42h** | |
+| **闃舵1** | P0-1 鍚戦噺鏁版嵁搴撻泦鎴?| 6.5h | 鏃?|
+| | P0-2 RAG妫€绱㈠疄鐜?| 5h | P0-1 |
+| **闃舵2** | P1-1 鏂囨。鍒嗗潡绛栫暐 | 8h | 鏃?|
+| | P1-2 閲嶆帓搴忔満鍒?| 5.5h | P0-2 |
+| | P1-3 娣峰悎妫€绱?| 8h | P0-1 |
+| **闃舵3** | P2-1 鏉ユ簮鍙俊搴﹁瘎浼?| 4.5h | 鏃?|
+| | P2-2 鐗堟湰绠＄悊 | 4.5h | 鏃?|
+| **鎬昏** | | **42h** | |
 
-### 6.3 里程碑
-
-| 里程碑 | 完成标准 | 预计完成 |
+### 6.3 閲岀▼纰?
+| 閲岀▼纰?| 瀹屾垚鏍囧噯 | 棰勮瀹屾垚 |
 |-------|---------|---------|
-| M1 | 向量数据库集成完成，测试通过 | 阶段1开始后8h |
-| M2 | RAG检索可用，报告质量提升 | 阶段1开始后13h |
-| M3 | 分块策略上线，事实提取质量提升 | 阶段2开始后8h |
-| M4 | 重排序+混合检索完成，检索效果提升 | 阶段2开始后21.5h |
-| M5 | 全部P0-P2任务完成 | 阶段3开始后9h |
+| M1 | 鍚戦噺鏁版嵁搴撻泦鎴愬畬鎴愶紝娴嬭瘯閫氳繃 | 闃舵1寮€濮嬪悗8h |
+| M2 | RAG妫€绱㈠彲鐢紝鎶ュ憡璐ㄩ噺鎻愬崌 | 闃舵1寮€濮嬪悗13h |
+| M3 | 鍒嗗潡绛栫暐涓婄嚎锛屼簨瀹炴彁鍙栬川閲忔彁鍗?| 闃舵2寮€濮嬪悗8h |
+| M4 | 閲嶆帓搴?娣峰悎妫€绱㈠畬鎴愶紝妫€绱㈡晥鏋滄彁鍗?| 闃舵2寮€濮嬪悗21.5h |
+| M5 | 鍏ㄩ儴P0-P2浠诲姟瀹屾垚 | 闃舵3寮€濮嬪悗9h |
 
 ---
 
-## 7. 风险评估与应对
-
-### 7.1 技术风险
-
-| 风险 | 可能性 | 影响 | 应对措施 |
+## 7. 椋庨櫓璇勪及涓庡簲瀵?
+### 7.1 鎶€鏈闄?
+| 椋庨櫓 | 鍙兘鎬?| 褰卞搷 | 搴斿鎺柦 |
 |-----|-------|-----|---------|
-| Qdrant部署失败 | 低 | 高 | 提供内存存储作为fallback |
-| LLM API限流 | 中 | 中 | 实现请求队列和重试机制 |
-| 分块导致事实断裂 | 中 | 中 | 添加重叠窗口和跨块合并 |
-| 重排序延迟过高 | 中 | 低 | 支持配置开关，可禁用 |
+| Qdrant閮ㄧ讲澶辫触 | 浣?| 楂?| 鎻愪緵鍐呭瓨瀛樺偍浣滀负fallback |
+| LLM API闄愭祦 | 涓?| 涓?| 瀹炵幇璇锋眰闃熷垪鍜岄噸璇曟満鍒?|
+| 鍒嗗潡瀵艰嚧浜嬪疄鏂 | 涓?| 涓?| 娣诲姞閲嶅彔绐楀彛鍜岃法鍧楀悎骞?|
+| 閲嶆帓搴忓欢杩熻繃楂?| 涓?| 浣?| 鏀寔閰嶇疆寮€鍏筹紝鍙鐢?|
 
-### 7.2 资源风险
+### 7.2 璧勬簮椋庨櫓
 
-| 风险 | 可能性 | 影响 | 应对措施 |
+| 椋庨櫓 | 鍙兘鎬?| 褰卞搷 | 搴斿鎺柦 |
 |-----|-------|-----|---------|
-| API成本增加 | 高 | 中 | 实现缓存机制，优化调用次数 |
-| 存储空间不足 | 低 | 中 | 实现数据清理策略 |
-| 内存占用过高 | 中 | 中 | 使用Qdrant替代内存存储 |
+| API鎴愭湰澧炲姞 | 楂?| 涓?| 瀹炵幇缂撳瓨鏈哄埗锛屼紭鍖栬皟鐢ㄦ鏁?|
+| 瀛樺偍绌洪棿涓嶈冻 | 浣?| 涓?| 瀹炵幇鏁版嵁娓呯悊绛栫暐 |
+| 鍐呭瓨鍗犵敤杩囬珮 | 涓?| 涓?| 浣跨敤Qdrant鏇夸唬鍐呭瓨瀛樺偍 |
 
-### 7.3 兼容性风险
-
-| 风险 | 可能性 | 影响 | 应对措施 |
+### 7.3 鍏煎鎬ч闄?
+| 椋庨櫓 | 鍙兘鎬?| 褰卞搷 | 搴斿鎺柦 |
 |-----|-------|-----|---------|
-| 现有测试失败 | 中 | 高 | 保持向后兼容，逐步迁移 |
-| 配置迁移问题 | 低 | 中 | 提供迁移脚本和文档 |
+| 鐜版湁娴嬭瘯澶辫触 | 涓?| 楂?| 淇濇寔鍚戝悗鍏煎锛岄€愭杩佺Щ |
+| 閰嶇疆杩佺Щ闂 | 浣?| 涓?| 鎻愪緵杩佺Щ鑴氭湰鍜屾枃妗?|
 
 ---
 
-## 附录
+## 闄勫綍
 
-### A. 文件变更清单
+### A. 鏂囦欢鍙樻洿娓呭崟
 
-| 文件 | 操作 | 说明 |
+| 鏂囦欢 | 鎿嶄綔 | 璇存槑 |
 |-----|-----|-----|
-| `core/vector_store_adapter.py` | 新增 | 向量存储适配器接口 |
-| `core/knowledge.py` | 修改 | 重构以支持多种存储后端 |
-| `core/rag_retriever.py` | 新增 | RAG检索器 |
-| `core/chunker.py` | 新增 | 语义分块器 |
-| `core/reranker.py` | 新增 | 重排序器 |
-| `core/hybrid_retriever.py` | 新增 | 混合检索器 |
-| `core/credibility.py` | 新增 | 可信度评估器 |
-| `core/version_manager.py` | 新增 | 版本管理器 |
-| `agents/distiller.py` | 修改 | 集成分块策略 |
-| `core/graph.py` | 修改 | 集成RAG检索 |
-| `core/config.py` | 修改 | 添加新配置项 |
+| `core/vector_store_adapter.py` | 鏂板 | 鍚戦噺瀛樺偍閫傞厤鍣ㄦ帴鍙?|
+| `core/knowledge.py` | 淇敼 | 閲嶆瀯浠ユ敮鎸佸绉嶅瓨鍌ㄥ悗绔?|
+| `core/rag_retriever.py` | 鏂板 | RAG妫€绱㈠櫒 |
+| `core/chunker.py` | 鏂板 | 璇箟鍒嗗潡鍣?|
+| `core/reranker.py` | 鏂板 | 閲嶆帓搴忓櫒 |
+| `core/hybrid_retriever.py` | 鏂板 | 娣峰悎妫€绱㈠櫒 |
+| `core/credibility.py` | 鏂板 | 鍙俊搴﹁瘎浼板櫒 |
+| `core/version_manager.py` | 鏂板 | 鐗堟湰绠＄悊鍣?|
+| `agents/distiller.py` | 淇敼 | 闆嗘垚鍒嗗潡绛栫暐 |
+| `core/graph.py` | 淇敼 | 闆嗘垚RAG妫€绱?|
+| `core/config.py` | 淇敼 | 娣诲姞鏂伴厤缃」 |
 
-### B. 配置项清单
-
+### B. 閰嶇疆椤规竻鍗?
 ```python
-# core/config.py 新增配置
+# core/config.py 鏂板閰嶇疆
 
 class RAGConfig:
-    # 向量检索
-    VECTOR_SEARCH_LIMIT: int = 20
+    # 鍚戦噺妫€绱?    VECTOR_SEARCH_LIMIT: int = 20
     VECTOR_SCORE_THRESHOLD: float = 0.3
     
-    # 重排序
-    ENABLE_RERANKER: bool = True
+    # 閲嶆帓搴?    ENABLE_RERANKER: bool = True
     RERANK_TOP_K: int = 10
     DIVERSITY_THRESHOLD: float = 0.8
     
-    # 混合检索
-    ENABLE_HYBRID_SEARCH: bool = True
+    # 娣峰悎妫€绱?    ENABLE_HYBRID_SEARCH: bool = True
     VECTOR_WEIGHT: float = 0.5
     KEYWORD_WEIGHT: float = 0.5
     
-    # 分块
+    # 鍒嗗潡
     CHUNK_MAX_TOKENS: int = 512
     CHUNK_OVERLAP_TOKENS: int = 50
     CHUNK_MIN_TOKENS: int = 100
     
-    # 可信度
-    ENABLE_CREDIBILITY_SCORING: bool = True
+    # 鍙俊搴?    ENABLE_CREDIBILITY_SCORING: bool = True
     MIN_CREDIBILITY_THRESHOLD: float = 0.5
 ```
 
-### C. 测试清单
+### C. 娴嬭瘯娓呭崟
 
-| 测试文件 | 测试内容 |
+| 娴嬭瘯鏂囦欢 | 娴嬭瘯鍐呭 |
 |---------|---------|
-| `tests/test_vector_adapter.py` | 向量存储适配器 |
-| `tests/test_rag_retriever.py` | RAG检索器 |
-| `tests/test_chunker.py` | 语义分块器 |
-| `tests/test_reranker.py` | 重排序器 |
-| `tests/test_hybrid_retriever.py` | 混合检索器 |
-| `tests/test_credibility.py` | 可信度评估器 |
-| `tests/test_version_manager.py` | 版本管理器 |
+| `tests/test_vector_adapter.py` | 鍚戦噺瀛樺偍閫傞厤鍣?|
+| `tests/test_rag_retriever.py` | RAG妫€绱㈠櫒 |
+| `tests/test_chunker.py` | 璇箟鍒嗗潡鍣?|
+| `tests/test_reranker.py` | 閲嶆帓搴忓櫒 |
+| `tests/test_hybrid_retriever.py` | 娣峰悎妫€绱㈠櫒 |
+| `tests/test_credibility.py` | 鍙俊搴﹁瘎浼板櫒 |
+| `tests/test_version_manager.py` | 鐗堟湰绠＄悊鍣?|
 
 ---
 
-> 文档结束  
-> 下一步: 按照优先级顺序开始实施 P0-1 任务
+> 鏂囨。缁撴潫  
+> 涓嬩竴姝? 鎸夌収浼樺厛绾ч『搴忓紑濮嬪疄鏂?P0-1 浠诲姟
+

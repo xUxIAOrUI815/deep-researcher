@@ -3,7 +3,6 @@ import time
 import json
 from datetime import datetime
 from providers import SmartScraper
-from agents import DistillerAgent
 
 
 TEST_URLS = [

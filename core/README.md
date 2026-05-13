@@ -1,213 +1,213 @@
-# core 核心逻辑模块说明
+﻿# core 鏍稿績閫昏緫妯″潡璇存槑
 
-## 文件目录
+## 鏂囦欢鐩綍
 ```
-├── config.py          # 配置管理
-├── graph.py           # LangGraph 工作流图
-├── knowledge.py       # 知识管理器
-├── planner_logic.py   # 规划逻辑
-├── router.py          # 路由器
-├── state_manager.py   # 状态管理
-├── content_transformer.py  # 结构化清洗模块
-├── semantic_chunker.py     # 语义分块模块 
-└── vector_store_qdrant.py  # 向量存储
+鈹溾攢鈹€ config.py          # 閰嶇疆绠＄悊
+鈹溾攢鈹€ graph.py           # LangGraph 宸ヤ綔娴佸浘
+鈹溾攢鈹€ session_knowledge.py       # 鐭ヨ瘑绠＄悊鍣?
+鈹溾攢鈹€ planner_logic.py   # 瑙勫垝閫昏緫
+鈹溾攢鈹€ router.py          # 璺敱鍣?
+鈹溾攢鈹€ state_manager.py   # 鐘舵€佺鐞?
+鈹溾攢鈹€ content_transformer.py  # 缁撴瀯鍖栨竻娲楁ā鍧?
+鈹溾攢鈹€ semantic_chunker.py     # 璇箟鍒嗗潡妯″潡 
+鈹斺攢鈹€ vector_store_qdrant.py  # 鍚戦噺瀛樺偍
 ```
 
-## 模块功能介绍
+## 妯″潡鍔熻兘浠嬬粛
 
 ### config.py
-  配置管理模块，分为三个类：ResearchConfig、QdrantConfig、ModelConfig
-  - ResearchConfig：研究相关配置，包括：
-    - MAX_DEPTH: 最大深度, 研究的最大深度, 控制知识图谱的层级深度
-    - MAX_NODE: 最大节点数, 最大节点数, 控制规模
-    - MAX_FACTS: 最大事实数, 最大事实数, 控制收集的事实总量
-    - SATURATION_SIMILARITY_THRESHOLD: 饱和度相似度阈值, 当新信息与现有信息相似度超过阈值时, 认为信息已饱和, 和MAX_DEPTH共同限制研究深度, 避免无限循环
-    - INFO_GAIN_THRESHOLD: 信息增益阈值, 控制新信息的价值评估
-    - TASK_SIMILARITY_THRESHOLD: 任务相似度阈值, 判断任务之间的相似性
-    - FACT_SIMILARITY_THRESHOLD: 事实相似度阈值, 判断事实之间的相似性
-    - MIN_SEARCH_RESULTS: 最小搜索结果, 确保由足够的信息来源
-    - MAX_SEARCH_RESULTS: 最大搜索结果, 控制搜索结果的数量
-    - MAX_FACTS_PER_CYCLE: 每个周期的最大事实数, 控制每个研究周期的信息处理量
-  - QdrantConfig：Qdrant相关配置: 定义Qdrant向量数据库的配置参数，支持通过环境变量进行配置
-    - HOST: 主机名
-    - PORT: 端口号, 可以通过环境变量QDRANT_PORT覆盖
-    - GRPC_PORT: GRPC端口号, 可以通过环境变量QDRANT_GRPC_PORT覆盖
-    - USE_QDRANT: 是否使用Qdrant向量数据库, 可通过环境变量USE_QDRANT覆盖
-    - COLLECTION_VECTOR_SIZE: 向量集合的维度大小, 用于存储嵌入向量
-  - ModelConfig：模型相关配置, 支持通过环境变量进行配置, 包含两个子配置: 
-    - 主配置: DEFAULT_MODEL: 默认使用的模型
-    - GLM子配置/DeepSeek子配置:
-      - API_KEY: 从环境配置中获取
+  閰嶇疆绠＄悊妯″潡锛屽垎涓轰笁涓被锛歊esearchConfig銆丵drantConfig銆丮odelConfig
+  - ResearchConfig锛氱爺绌剁浉鍏抽厤缃紝鍖呮嫭锛?
+    - MAX_DEPTH: 鏈€澶ф繁搴? 鐮旂┒鐨勬渶澶ф繁搴? 鎺у埗鐭ヨ瘑鍥捐氨鐨勫眰绾ф繁搴?
+    - MAX_NODE: 鏈€澶ц妭鐐规暟, 鏈€澶ц妭鐐规暟, 鎺у埗瑙勬ā
+    - MAX_FACTS: 鏈€澶т簨瀹炴暟, 鏈€澶т簨瀹炴暟, 鎺у埗鏀堕泦鐨勪簨瀹炴€婚噺
+    - SATURATION_SIMILARITY_THRESHOLD: 楗卞拰搴︾浉浼煎害闃堝€? 褰撴柊淇℃伅涓庣幇鏈変俊鎭浉浼煎害瓒呰繃闃堝€兼椂, 璁や负淇℃伅宸查ケ鍜? 鍜孧AX_DEPTH鍏卞悓闄愬埗鐮旂┒娣卞害, 閬垮厤鏃犻檺寰幆
+    - INFO_GAIN_THRESHOLD: 淇℃伅澧炵泭闃堝€? 鎺у埗鏂颁俊鎭殑浠峰€艰瘎浼?
+    - TASK_SIMILARITY_THRESHOLD: 浠诲姟鐩镐技搴﹂槇鍊? 鍒ゆ柇浠诲姟涔嬮棿鐨勭浉浼兼€?
+    - FACT_SIMILARITY_THRESHOLD: 浜嬪疄鐩镐技搴﹂槇鍊? 鍒ゆ柇浜嬪疄涔嬮棿鐨勭浉浼兼€?
+    - MIN_SEARCH_RESULTS: 鏈€灏忔悳绱㈢粨鏋? 纭繚鐢辫冻澶熺殑淇℃伅鏉ユ簮
+    - MAX_SEARCH_RESULTS: 鏈€澶ф悳绱㈢粨鏋? 鎺у埗鎼滅储缁撴灉鐨勬暟閲?
+    - MAX_FACTS_PER_CYCLE: 姣忎釜鍛ㄦ湡鐨勬渶澶т簨瀹炴暟, 鎺у埗姣忎釜鐮旂┒鍛ㄦ湡鐨勪俊鎭鐞嗛噺
+  - QdrantConfig锛歈drant鐩稿叧閰嶇疆: 瀹氫箟Qdrant鍚戦噺鏁版嵁搴撶殑閰嶇疆鍙傛暟锛屾敮鎸侀€氳繃鐜鍙橀噺杩涜閰嶇疆
+    - HOST: 涓绘満鍚?
+    - PORT: 绔彛鍙? 鍙互閫氳繃鐜鍙橀噺QDRANT_PORT瑕嗙洊
+    - GRPC_PORT: GRPC绔彛鍙? 鍙互閫氳繃鐜鍙橀噺QDRANT_GRPC_PORT瑕嗙洊
+    - USE_QDRANT: 鏄惁浣跨敤Qdrant鍚戦噺鏁版嵁搴? 鍙€氳繃鐜鍙橀噺USE_QDRANT瑕嗙洊
+    - COLLECTION_VECTOR_SIZE: 鍚戦噺闆嗗悎鐨勭淮搴﹀ぇ灏? 鐢ㄤ簬瀛樺偍宓屽叆鍚戦噺
+  - ModelConfig锛氭ā鍨嬬浉鍏抽厤缃? 鏀寔閫氳繃鐜鍙橀噺杩涜閰嶇疆, 鍖呭惈涓や釜瀛愰厤缃? 
+    - 涓婚厤缃? DEFAULT_MODEL: 榛樿浣跨敤鐨勬ā鍨?
+    - GLM瀛愰厤缃?DeepSeek瀛愰厤缃?
+      - API_KEY: 浠庣幆澧冮厤缃腑鑾峰彇
       - API_BASE: 
-      - MODEL_NAME: 模型名称
+      - MODEL_NAME: 妯″瀷鍚嶇О
 
-### ContentTransformer模块
-  结构化清洗与视图转换模块, 将原始的Markdown文本转换为结构化的内容, 包括元数据提取、内容清洗和章节提取
-  - ContentMetadata: 存储内容的元数据信息
-  - StructuredContent: 存储结构化的内容
-  - ContentTransformer: 初始化转换器, 
-    - 将原始的Markdown文本转换为结构化的内容
-    - 从Markdown文本提取元数据
-    - 清洗Markdown文本, 定义一系列需要跳过的模式
-    - 提取Markdown文本中的章节标题
+### ContentTransformer妯″潡
+  缁撴瀯鍖栨竻娲椾笌瑙嗗浘杞崲妯″潡, 灏嗗師濮嬬殑Markdown鏂囨湰杞崲涓虹粨鏋勫寲鐨勫唴瀹? 鍖呮嫭鍏冩暟鎹彁鍙栥€佸唴瀹规竻娲楀拰绔犺妭鎻愬彇
+  - ContentMetadata: 瀛樺偍鍐呭鐨勫厓鏁版嵁淇℃伅
+  - StructuredContent: 瀛樺偍缁撴瀯鍖栫殑鍐呭
+  - ContentTransformer: 鍒濆鍖栬浆鎹㈠櫒, 
+    - 灏嗗師濮嬬殑Markdown鏂囨湰杞崲涓虹粨鏋勫寲鐨勫唴瀹?
+    - 浠嶮arkdown鏂囨湰鎻愬彇鍏冩暟鎹?
+    - 娓呮礂Markdown鏂囨湰, 瀹氫箟涓€绯诲垪闇€瑕佽烦杩囩殑妯″紡
+    - 鎻愬彇Markdown鏂囨湰涓殑绔犺妭鏍囬
   
 ### Convergence
-  收敛检查器，用于判断研究过程中是否应该结束(收敛)。通过分析当前研究状态，基于预设的规则和配置参数，判断研究是否收敛。
-  - ConvergenceDecision: 存储收敛决策的结果
-    - should_converge: 布尔值，是否收敛
-    - reason: 字符串，说明收敛或不收敛的原因
-    - action: 字符串，表示应该采取的行动 finish或continue  这个判断来自于planner_action 
-    - skip_pending_tasks: 布尔值，表示是否跳过待办任务
-  - ConvergenceChecker: 收敛检查器
-    - check 方法: 判断条件
-      修改planner的设计，先设置大纲，结合大纲和任务树共同确定任务是否终止。
+  鏀舵暃妫€鏌ュ櫒锛岀敤浜庡垽鏂爺绌惰繃绋嬩腑鏄惁搴旇缁撴潫(鏀舵暃)銆傞€氳繃鍒嗘瀽褰撳墠鐮旂┒鐘舵€侊紝鍩轰簬棰勮鐨勮鍒欏拰閰嶇疆鍙傛暟锛屽垽鏂爺绌舵槸鍚︽敹鏁涖€?
+  - ConvergenceDecision: 瀛樺偍鏀舵暃鍐崇瓥鐨勭粨鏋?
+    - should_converge: 甯冨皵鍊硷紝鏄惁鏀舵暃
+    - reason: 瀛楃涓诧紝璇存槑鏀舵暃鎴栦笉鏀舵暃鐨勫師鍥?
+    - action: 瀛楃涓诧紝琛ㄧず搴旇閲囧彇鐨勮鍔?finish鎴朿ontinue  杩欎釜鍒ゆ柇鏉ヨ嚜浜巔lanner_action 
+    - skip_pending_tasks: 甯冨皵鍊硷紝琛ㄧず鏄惁璺宠繃寰呭姙浠诲姟
+  - ConvergenceChecker: 鏀舵暃妫€鏌ュ櫒
+    - check 鏂规硶: 鍒ゆ柇鏉′欢
+      淇敼planner鐨勮璁★紝鍏堣缃ぇ绾诧紝缁撳悎澶х翰鍜屼换鍔℃爲鍏卞悓纭畾浠诲姟鏄惁缁堟銆?
 
 ### graph
-  - GraphState: 研究图的状态结构
-    - 任务树
-    - 事实池
-    - 原子事实
-    - 令牌使用
-    - 当前焦点任务
-    - 根任务ID
-    - 已完成的任务
-    - 失败的任务
-    - 消息列表
-    - 原始抓取数据
-    - 搜索结果
-    - 最终报告
-  - 节点函数
-    - planner 节点
-      - 和Agents/planner对比
-        1. 这部分代码只初始化根节点，模拟消耗token，固定+100，假装做了规划，没有智能决策，只是初始化占位函数
-    - researcher 节点
-      - 执行研究任务，包括搜索和网页抓取
-      - 实现
-        - 查找待处理任务
-        - 使用 MCPGateway 进行搜索
-        - 使用 SmartScraper 抓取网页内容
-        - 更新任务状态和收集数据
-    - distiller 节点
-      当前的任务是：从文章、网页中提取原子事实，生成摘要
-      不依赖框架，可以自己执行
-      - 核心模块
-        - 初始化配置 信号量控制并发，线程锁保证日志/异常安全打印
-        - 提示词工程
-          - 只提取可验证事实
-          - 实体明确
+  - GraphState: 鐮旂┒鍥剧殑鐘舵€佺粨鏋?
+    - 浠诲姟鏍?
+    - 浜嬪疄姹?
+    - 鍘熷瓙浜嬪疄
+    - 浠ょ墝浣跨敤
+    - 褰撳墠鐒︾偣浠诲姟
+    - 鏍逛换鍔D
+    - 宸插畬鎴愮殑浠诲姟
+    - 澶辫触鐨勪换鍔?
+    - 娑堟伅鍒楄〃
+    - 鍘熷鎶撳彇鏁版嵁
+    - 鎼滅储缁撴灉
+    - 鏈€缁堟姤鍛?
+  - 鑺傜偣鍑芥暟
+    - planner 鑺傜偣
+      - 鍜孉gents/planner瀵规瘮
+        1. 杩欓儴鍒嗕唬鐮佸彧鍒濆鍖栨牴鑺傜偣锛屾ā鎷熸秷鑰梩oken锛屽浐瀹?100锛屽亣瑁呭仛浜嗚鍒掞紝娌℃湁鏅鸿兘鍐崇瓥锛屽彧鏄垵濮嬪寲鍗犱綅鍑芥暟
+    - researcher 鑺傜偣
+      - 鎵ц鐮旂┒浠诲姟锛屽寘鎷悳绱㈠拰缃戦〉鎶撳彇
+      - 瀹炵幇
+        - 鏌ユ壘寰呭鐞嗕换鍔?
+        - 浣跨敤 MCPGateway 杩涜鎼滅储
+        - 浣跨敤 SmartScraper 鎶撳彇缃戦〉鍐呭
+        - 鏇存柊浠诲姟鐘舵€佸拰鏀堕泦鏁版嵁
+    - distiller 鑺傜偣
+      褰撳墠鐨勪换鍔℃槸锛氫粠鏂囩珷銆佺綉椤典腑鎻愬彇鍘熷瓙浜嬪疄锛岀敓鎴愭憳瑕?
+      涓嶄緷璧栨鏋讹紝鍙互鑷繁鎵ц
+      - 鏍稿績妯″潡
+        - 鍒濆鍖栭厤缃?淇″彿閲忔帶鍒跺苟鍙戯紝绾跨▼閿佷繚璇佹棩蹇?寮傚父瀹夊叏鎵撳嵃
+        - 鎻愮ず璇嶅伐绋?
+          - 鍙彁鍙栧彲楠岃瘉浜嬪疄
+          - 瀹炰綋鏄庣‘
           - balabala
-        - API 调用异常处理
-        - 结果解析 
+        - API 璋冪敤寮傚父澶勭悊
+        - 缁撴灉瑙ｆ瀽 
     - writer
-      根据提取的原子事实生成调研简报 × 
-      应该是深度调研报告
-      - 处理原子事实，生成上下文
-      - 构建提示词生成报告 调用 DeepSeek API 生成报告
-      - 处理API调用错误和速率限制
-      - 没有API密钥时生成模拟报告
-  - 控制函数
-    决定工作流是否应该继续
-    检查是否存在待处理的任务
-  - 创建研究图
-    添加节点和编译图
-  - SQLite存储
-    保存工作流状态
-    创建并返回 AsyncSqliteSaver
-  - 研究周期
-    - 初始化SQLite存储
-    - 创建研究图
-    - 设置初始状态
-    - 运行工作流
-    - 打印结果统计
-    - 关闭数据库连接并返回结果
+      鏍规嵁鎻愬彇鐨勫師瀛愪簨瀹炵敓鎴愯皟鐮旂畝鎶?脳 
+      搴旇鏄繁搴﹁皟鐮旀姤鍛?
+      - 澶勭悊鍘熷瓙浜嬪疄锛岀敓鎴愪笂涓嬫枃
+      - 鏋勫缓鎻愮ず璇嶇敓鎴愭姤鍛?璋冪敤 DeepSeek API 鐢熸垚鎶ュ憡
+      - 澶勭悊API璋冪敤閿欒鍜岄€熺巼闄愬埗
+      - 娌℃湁API瀵嗛挜鏃剁敓鎴愭ā鎷熸姤鍛?
+  - 鎺у埗鍑芥暟
+    鍐冲畾宸ヤ綔娴佹槸鍚﹀簲璇ョ户缁?
+    妫€鏌ユ槸鍚﹀瓨鍦ㄥ緟澶勭悊鐨勪换鍔?
+  - 鍒涘缓鐮旂┒鍥?
+    娣诲姞鑺傜偣鍜岀紪璇戝浘
+  - SQLite瀛樺偍
+    淇濆瓨宸ヤ綔娴佺姸鎬?
+    鍒涘缓骞惰繑鍥?AsyncSqliteSaver
+  - 鐮旂┒鍛ㄦ湡
+    - 鍒濆鍖朣QLite瀛樺偍
+    - 鍒涘缓鐮旂┒鍥?
+    - 璁剧疆鍒濆鐘舵€?
+    - 杩愯宸ヤ綔娴?
+    - 鎵撳嵃缁撴灉缁熻
+    - 鍏抽棴鏁版嵁搴撹繛鎺ュ苟杩斿洖缁撴灉
 
 ### knowledge
-知识管理系统，用于存储、管理和检索研究过程中提取的原子事实，并提供了事实冲突检测、相似性搜索等功能
+鐭ヨ瘑绠＄悊绯荤粺锛岀敤浜庡瓨鍌ㄣ€佺鐞嗗拰妫€绱㈢爺绌惰繃绋嬩腑鎻愬彇鐨勫師瀛愪簨瀹烇紝骞舵彁渚涗簡浜嬪疄鍐茬獊妫€娴嬨€佺浉浼兼€ф悳绱㈢瓑鍔熻兘
 
-用distillerAgent来调用knowledge?
-- FactStatus 定义了事实的枚举状态
-  - ACTIVE ：活跃状态，新添加的事实
-  - VERIFIED ：已验证状态，由多个来源确认的事实
-  - CONFLICTING ：冲突状态，与其他事实存在矛盾
-  - SUPERSEDED ：被取代状态，被新事实取代的旧事实
-- EmbeddingModel 嵌入模型
-  - 生成文本的向量嵌入，用于相似性计算
+鐢╠istillerAgent鏉ヨ皟鐢╧nowledge?
+- FactStatus 瀹氫箟浜嗕簨瀹炵殑鏋氫妇鐘舵€?
+  - ACTIVE 锛氭椿璺冪姸鎬侊紝鏂版坊鍔犵殑浜嬪疄
+  - VERIFIED 锛氬凡楠岃瘉鐘舵€侊紝鐢卞涓潵婧愮‘璁ょ殑浜嬪疄
+  - CONFLICTING 锛氬啿绐佺姸鎬侊紝涓庡叾浠栦簨瀹炲瓨鍦ㄧ煕鐩?
+  - SUPERSEDED 锛氳鍙栦唬鐘舵€侊紝琚柊浜嬪疄鍙栦唬鐨勬棫浜嬪疄
+- EmbeddingModel 宓屽叆妯″瀷
+  - 鐢熸垚鏂囨湰鐨勫悜閲忓祵鍏ワ紝鐢ㄤ簬鐩镐技鎬ц绠?
 - FactConflict
-  - 字段设计有问题
-  - fact_id_1 ：第一个冲突事实的 ID
-  - fact_id_2 ：第二个冲突事实的 ID
-  - conflict_description ：冲突描述
-  - detected_at ：冲突检测时间
+  - 瀛楁璁捐鏈夐棶棰?
+  - fact_id_1 锛氱涓€涓啿绐佷簨瀹炵殑 ID
+  - fact_id_2 锛氱浜屼釜鍐茬獊浜嬪疄鐨?ID
+  - conflict_description 锛氬啿绐佹弿杩?
+  - detected_at 锛氬啿绐佹娴嬫椂闂?
 - KnowledgeStatus
-  - 存储知识管理系统的统计信息
-  - total_facts ：总事实数
-  - verified_facts ：已验证事实数
-  - conflicting_facts ：冲突事实数
-  - conflicts_detected ：检测到的冲突数
-  - duplicates_merged ：合并的重复数
+  - 瀛樺偍鐭ヨ瘑绠＄悊绯荤粺鐨勭粺璁′俊鎭?
+  - total_facts 锛氭€讳簨瀹炴暟
+  - verified_facts 锛氬凡楠岃瘉浜嬪疄鏁?
+  - conflicting_facts 锛氬啿绐佷簨瀹炴暟
+  - conflicts_detected 锛氭娴嬪埌鐨勫啿绐佹暟
+  - duplicates_merged 锛氬悎骞剁殑閲嶅鏁?
 - StoredFact
-  - 存储带有嵌入的原子事实
-  - 生成唯一 ID
-  - 存储原子事实和其嵌入向量
-  - 跟踪事实状态
-  - 提供转换为字典的方法，用于存储
-- KnowledgeManager 知识管理类
-  - 管理事实的存储、检索、冲突检测
-    - 设置存储路径
-    - 初始化嵌入模型
-    - 创建事实字典
-    - 设置并发限制信号量
-    - 初始化统计信息
-    - 加载现有数据 
-  - 加载和保存方法
-    - JSON 文件存储数据
-    - 加载时重建StoredFact对象
-    - 保存时将StoredFact对象转换为字典
-  - 相似性计算方法
-    - 利用向量相似度并查找相似事实
-    - 遍历？
-    - 为什么不用向量数据库
-  - 添加事实方法
-    - 添加事实并处理重复和冲突
-      - 批量添加事实，用信号量控制并发
-      - 处理重复事实
-      - 处理验证事实
-      - 处理冲突事实
-      - 添加新事实
-  - 搜索和查询方法
-    - 当前阈值设置为 0 ？
-  - 管理方法
-    - 删除单个事实
-    - 清空整个事实集合
+  - 瀛樺偍甯︽湁宓屽叆鐨勫師瀛愪簨瀹?
+  - 鐢熸垚鍞竴 ID
+  - 瀛樺偍鍘熷瓙浜嬪疄鍜屽叾宓屽叆鍚戦噺
+  - 璺熻釜浜嬪疄鐘舵€?
+  - 鎻愪緵杞崲涓哄瓧鍏哥殑鏂规硶锛岀敤浜庡瓨鍌?
+- KnowledgeManager 鐭ヨ瘑绠＄悊绫?
+  - 绠＄悊浜嬪疄鐨勫瓨鍌ㄣ€佹绱€佸啿绐佹娴?
+    - 璁剧疆瀛樺偍璺緞
+    - 鍒濆鍖栧祵鍏ユā鍨?
+    - 鍒涘缓浜嬪疄瀛楀吀
+    - 璁剧疆骞跺彂闄愬埗淇″彿閲?
+    - 鍒濆鍖栫粺璁′俊鎭?
+    - 鍔犺浇鐜版湁鏁版嵁 
+  - 鍔犺浇鍜屼繚瀛樻柟娉?
+    - JSON 鏂囦欢瀛樺偍鏁版嵁
+    - 鍔犺浇鏃堕噸寤篠toredFact瀵硅薄
+    - 淇濆瓨鏃跺皢StoredFact瀵硅薄杞崲涓哄瓧鍏?
+  - 鐩镐技鎬ц绠楁柟娉?
+    - 鍒╃敤鍚戦噺鐩镐技搴﹀苟鏌ユ壘鐩镐技浜嬪疄
+    - 閬嶅巻锛?
+    - 涓轰粈涔堜笉鐢ㄥ悜閲忔暟鎹簱
+  - 娣诲姞浜嬪疄鏂规硶
+    - 娣诲姞浜嬪疄骞跺鐞嗛噸澶嶅拰鍐茬獊
+      - 鎵归噺娣诲姞浜嬪疄锛岀敤淇″彿閲忔帶鍒跺苟鍙?
+      - 澶勭悊閲嶅浜嬪疄
+      - 澶勭悊楠岃瘉浜嬪疄
+      - 澶勭悊鍐茬獊浜嬪疄
+      - 娣诲姞鏂颁簨瀹?
+  - 鎼滅储鍜屾煡璇㈡柟娉?
+    - 褰撳墠闃堝€艰缃负 0 锛?
+  - 绠＄悊鏂规硶
+    - 鍒犻櫎鍗曚釜浜嬪疄
+    - 娓呯┖鏁翠釜浜嬪疄闆嗗悎
 
 ### planner_logic
-信息饱和度检查
-- SaturationResult 数据类
-  - 存储信息饱和度检查的结果
-    - is_sataturated: 是否饱和
-    - repetition_rate: 重复率 相似事实数/总检查事实数
-    - new_facts_count: 新事物的数量
-    - similar_count: 相似事实数
-    - forced_finish: 是否强制结束
-  - SaturationChecker 饱和度检查器类
-    - 接受 KnowledgeManeger 实例，用于查找相似事实
-    - 检查新收集的事实是否与已有的事实重复，判断是否达到信息饱和
-      - new_facts: 新收集的事实列表
-      - collection_name: 集合名称
-      - is_user_triggered: 是否由用户触发
-    - 实现逻辑
-      如果没有新事实，返回未饱和状态
-      如果是用户触发的任务，跳过饱和度检查
-      遍历每个新事实，使用 KnowledgeManager 查找相似事实 (这里是遍历会有什么问题？)
-      计算重复率
-      如果重复率超过阈值，认为达到信息饱和(即当前能找到的信息已经没有新的价值)
-      返回饱和度检查结果
+淇℃伅楗卞拰搴︽鏌?
+- SaturationResult 鏁版嵁绫?
+  - 瀛樺偍淇℃伅楗卞拰搴︽鏌ョ殑缁撴灉
+    - is_sataturated: 鏄惁楗卞拰
+    - repetition_rate: 閲嶅鐜?鐩镐技浜嬪疄鏁?鎬绘鏌ヤ簨瀹炴暟
+    - new_facts_count: 鏂颁簨鐗╃殑鏁伴噺
+    - similar_count: 鐩镐技浜嬪疄鏁?
+    - forced_finish: 鏄惁寮哄埗缁撴潫
+  - SaturationChecker 楗卞拰搴︽鏌ュ櫒绫?
+    - 鎺ュ彈 KnowledgeManeger 瀹炰緥锛岀敤浜庢煡鎵剧浉浼间簨瀹?
+    - 妫€鏌ユ柊鏀堕泦鐨勪簨瀹炴槸鍚︿笌宸叉湁鐨勪簨瀹為噸澶嶏紝鍒ゆ柇鏄惁杈惧埌淇℃伅楗卞拰
+      - new_facts: 鏂版敹闆嗙殑浜嬪疄鍒楄〃
+      - collection_name: 闆嗗悎鍚嶇О
+      - is_user_triggered: 鏄惁鐢辩敤鎴疯Е鍙?
+    - 瀹炵幇閫昏緫
+      濡傛灉娌℃湁鏂颁簨瀹烇紝杩斿洖鏈ケ鍜岀姸鎬?
+      濡傛灉鏄敤鎴疯Е鍙戠殑浠诲姟锛岃烦杩囬ケ鍜屽害妫€鏌?
+      閬嶅巻姣忎釜鏂颁簨瀹烇紝浣跨敤 KnowledgeManager 鏌ユ壘鐩镐技浜嬪疄 (杩欓噷鏄亶鍘嗕細鏈変粈涔堥棶棰橈紵)
+      璁＄畻閲嶅鐜?
+      濡傛灉閲嶅鐜囪秴杩囬槇鍊硷紝璁や负杈惧埌淇℃伅楗卞拰(鍗冲綋鍓嶈兘鎵惧埌鐨勪俊鎭凡缁忔病鏈夋柊鐨勪环鍊?
+      杩斿洖楗卞拰搴︽鏌ョ粨鏋?
 
 ### router
-路由器功能，决定研究工作流的下一步操作，基于ConvergenceChecker的决策结果
+璺敱鍣ㄥ姛鑳斤紝鍐冲畾鐮旂┒宸ヤ綔娴佺殑涓嬩竴姝ユ搷浣滐紝鍩轰簬ConvergenceChecker鐨勫喅绛栫粨鏋?
 - should_continue
-  - 根据当前研究状态，决定工作流的下一步操作
-- graph.py 也有 should_continue 方法
-  - 比较
+  - 鏍规嵁褰撳墠鐮旂┒鐘舵€侊紝鍐冲畾宸ヤ綔娴佺殑涓嬩竴姝ユ搷浣?
+- graph.py 涔熸湁 should_continue 鏂规硶
+  - 姣旇緝
   
   

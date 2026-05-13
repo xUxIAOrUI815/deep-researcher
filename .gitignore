@@ -37,3 +37,11 @@ knowledge_data/
 
 
 .env
+
+# 临时目录
+.console_runtime/
+.tmp_km/
+tmp_km_check/
+tmp_km_check2/
+tmp_sqlite_check/
+tests/.tmp/

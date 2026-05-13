@@ -1,7 +1,11 @@
+import re
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
 from core.config import ResearchConfig
+from core.context_builders import PlannerContextBuilder
+from core.session_retrieval import SessionRetrievalService
+from schemas.retrieval import PlannerContext
 from schemas.state import PlannerState
 from schemas.task_tree import TaskTreePatch
 
@@ -15,6 +19,7 @@ class PlannerRunResult:
 
 
 def _pending_task_ids(task_tree: Dict[str, Any]) -> List[str]:
+    """返回当前任务树中状态仍为 pending 的任务 ID 列表。"""
     return [
         task_id
         for task_id, task in task_tree.items()
@@ -23,6 +28,7 @@ def _pending_task_ids(task_tree: Dict[str, Any]) -> List[str]:
 
 
 def _select_next_task_id(task_tree: Dict[str, Any]) -> Optional[str]:
+    """按优先级、层级深度和创建顺序选择下一个待执行任务。"""
     pending = _pending_task_ids(task_tree)
     if not pending:
         return None
@@ -37,6 +43,7 @@ def _select_next_task_id(task_tree: Dict[str, Any]) -> Optional[str]:
 
 
 def _find_root_task_id(task_tree: Dict[str, Any]) -> Optional[str]:
+    """查找根任务 ID；若结构不完整，则退化为返回第一个任务。"""
     for task_id, task in task_tree.items():
         if task.get("parent_id") is None and task.get("parent_task_id") is None:
             return task_id
@@ -44,6 +51,7 @@ def _find_root_task_id(task_tree: Dict[str, Any]) -> Optional[str]:
 
 
 def _task_children(task_tree: Dict[str, Any], task_id: str) -> List[str]:
+    """获取指定任务的子任务 ID，优先使用 children_ids，否则扫描父子关系。"""
     task = task_tree.get(task_id, {})
     children = list(task.get("children_ids", []))
     if children:
@@ -56,6 +64,7 @@ def _task_children(task_tree: Dict[str, Any], task_id: str) -> List[str]:
 
 
 def _is_initial_decomposition_needed(task_tree: Dict[str, Any]) -> bool:
+    """判断当前任务树是否只包含一个尚未拆解的根任务。"""
     root_id = _find_root_task_id(task_tree)
     if not root_id:
         return False
@@ -69,6 +78,7 @@ def _is_initial_decomposition_needed(task_tree: Dict[str, Any]) -> bool:
 
 
 def _make_default_outline(user_query: str, report_outline: Dict[str, Any]) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """在缺少大纲时生成默认报告结构和对应的小节目标。"""
     if report_outline and report_outline.get("sections"):
         return report_outline, []
 
@@ -117,6 +127,7 @@ def _build_initial_decomposition(
     user_query: str,
     task_tree: Dict[str, Any],
 ) -> tuple[List["TaskTreePatch"], List[str]]:
+    """将根任务拆解为首批可执行的研究子任务。"""
     from schemas.task_tree import TaskNode, TaskTreePatch
 
     root_id = _find_root_task_id(task_tree)
@@ -189,6 +200,7 @@ def _build_replanning_patches(
     task_tree: Dict[str, Any],
     distiller_outputs: Dict[str, Any],
 ) -> tuple[List["TaskTreePatch"], List[str]]:
+    """根据缺口、冲突和覆盖不足情况生成后续补充任务。"""
     from schemas.task_tree import TaskNode, TaskTreePatch
 
     root_id = _find_root_task_id(task_tree)
@@ -200,7 +212,12 @@ def _build_replanning_patches(
     new_task_ids: List[str] = []
     coverage_summary = distiller_outputs.get("coverage_summary", {}) or {}
 
-    for gap in distiller_outputs.get("unresolved_gaps", [])[:2]:
+    added_gap_tasks = 0
+    for gap in distiller_outputs.get("unresolved_gaps", []):
+        if added_gap_tasks >= 2:
+            break
+        if not _is_actionable_gap(gap, user_query):
+            continue
         title = f"Resolve gap: {gap}"[:120]
         if title.lower() in existing_titles:
             continue
@@ -219,6 +236,7 @@ def _build_replanning_patches(
         )
         patches.append(TaskTreePatch(operation="attach", parent_task_id=root_id, task=task, rationale=str(gap), created_by="planner"))
         new_task_ids.append(task.id)
+        added_gap_tasks += 1
 
     conflict_ids = distiller_outputs.get("conflict_ids", [])
     if conflict_ids and "verify conflicting evidence" not in existing_titles:
@@ -271,7 +289,67 @@ def _build_replanning_patches(
     return patches, new_task_ids
 
 
+def _tokenize_planning_text(text: str) -> List[str]:
+    return re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]+", (text or "").lower())
+
+
+def _is_actionable_gap(gap: Any, user_query: str) -> bool:
+    text = str(gap or "").strip()
+    if len(text) < 12:
+        return False
+    lower = text.lower()
+    if "low evidence coverage for section" in lower:
+        return True
+    noisy_markers = (
+        "seek high_authority_primary_source",
+        "without alan",
+        "verification reasoning using conflicting crave",
+        "what into",
+    )
+    if any(marker in lower for marker in noisy_markers):
+        return False
+
+    hint = lower
+    marker = "coverage gap around hinted topic:"
+    if marker in hint:
+        hint = hint.split(marker, 1)[1].strip()
+    tokens = _tokenize_planning_text(hint)
+    if len(tokens) < 2:
+        return False
+
+    query_tokens = set(_tokenize_planning_text(user_query))
+    overlap_count = len(set(tokens) & query_tokens)
+    if overlap_count == 0:
+        return False
+    if len(tokens) > 8 and (overlap_count / max(1, len(set(tokens)))) < 0.2:
+        return False
+    return True
+
+
+def _writing_budget_reached(
+    *,
+    research_depth: str,
+    completed_count: int,
+    ready_section_count: int,
+    pack_count: int,
+    coverage: float,
+) -> bool:
+    thresholds = {
+        "quick": {"completed": 3, "ready": 2, "packs": 2, "coverage": 0.45},
+        "standard": {"completed": 6, "ready": 3, "packs": 4, "coverage": 0.55},
+        "deep": {"completed": 10, "ready": 4, "packs": 4, "coverage": 0.75},
+    }
+    threshold = thresholds.get((research_depth or "standard").lower(), thresholds["standard"])
+    return (
+        completed_count >= threshold["completed"]
+        and ready_section_count >= threshold["ready"]
+        and pack_count >= threshold["packs"]
+        and coverage >= threshold["coverage"]
+    )
+
+
 def _build_maintenance_patches(task_tree: Dict[str, Any]) -> List["TaskTreePatch"]:
+    """为过深任务和重复待办任务生成维护性修补操作。"""
     from schemas.task_tree import TaskTreePatch
 
     patches: List[TaskTreePatch] = []
@@ -318,6 +396,7 @@ def _build_maintenance_patches(task_tree: Dict[str, Any]) -> List["TaskTreePatch
 
 
 def _apply_patches_to_draft(task_tree: Dict[str, Any], patches: List[Any]) -> Dict[str, Any]:
+    """将补丁应用到内存中的任务树草稿，供后续决策使用。"""
     draft = {task_id: dict(task) for task_id, task in task_tree.items()}
     for patch in patches:
         patch_data = patch if isinstance(patch, dict) else patch.model_dump()
@@ -347,13 +426,30 @@ def _coverage_score(
     knowledge_refs: Dict[str, Any],
     section_evidence_packs: List[Dict[str, Any]],
     distiller_outputs: Dict[str, Any],
+    session_snapshot: Optional[Dict[str, Any]] = None,
+    planner_context: Optional[Dict[str, Any]] = None,
 ) -> float:
-    coverage_summary = distiller_outputs.get("coverage_summary", {}) or {}
-    fact_count = len(knowledge_refs.get("fact_ids", [])) + len(distiller_outputs.get("fact_ids", []))
-    evidence_count = len(knowledge_refs.get("evidence_ids", [])) + len(distiller_outputs.get("evidence_ids", []))
+    """基于证据包、事实数量和覆盖摘要估算当前研究覆盖度。"""
+    coverage_summary = dict(distiller_outputs.get("coverage_summary", {}) or {})
+    if planner_context:
+        coverage_summary = dict(planner_context.get("coverage_summary", {}) or coverage_summary)
+        effective_refs = dict(session_snapshot.get("knowledge_refs", {}) or {}) if session_snapshot else dict(knowledge_refs or {})
+        fact_count = len(session_snapshot.get("facts", [])) if session_snapshot else len(effective_refs.get("fact_ids", []))
+        evidence_count = len(session_snapshot.get("evidence", [])) if session_snapshot else len(effective_refs.get("evidence_ids", []))
+        effective_packs = list(planner_context.get("section_packs", []))
+    elif session_snapshot:
+        effective_refs = dict(session_snapshot.get("knowledge_refs", {}) or {})
+        fact_count = len(effective_refs.get("fact_ids", []))
+        evidence_count = len(effective_refs.get("evidence_ids", []))
+        effective_packs = list(session_snapshot.get("section_evidence_packs", []))
+    else:
+        effective_refs = dict(knowledge_refs or {})
+        fact_count = len(effective_refs.get("fact_ids", [])) + len(distiller_outputs.get("fact_ids", []))
+        evidence_count = len(effective_refs.get("evidence_ids", [])) + len(distiller_outputs.get("evidence_ids", []))
+        effective_packs = list(section_evidence_packs or [])
     pack_score = 0.0
-    if section_evidence_packs:
-        pack_score = sum(float(pack.get("coverage_score", 0.0)) for pack in section_evidence_packs) / len(section_evidence_packs)
+    if effective_packs:
+        pack_score = sum(float(pack.get("coverage_score", 0.0)) for pack in effective_packs) / len(effective_packs)
     count_score = min(1.0, (fact_count * 0.08) + (evidence_count * 0.12))
     summary_score = float(coverage_summary.get("avg_section_coverage", 0.0) or 0.0)
     if coverage_summary.get("sufficiency_level") == "sufficient_for_writing":
@@ -361,6 +457,29 @@ def _coverage_score(
     elif coverage_summary.get("sufficiency_level") == "partial":
         summary_score = max(summary_score, 0.35)
     return max(pack_score, count_score, summary_score)
+
+
+def _planner_context_from_snapshot(
+    *,
+    knowledge_manager: Any,
+    research_id: str,
+    session_id: str,
+    user_query: str,
+    task_tree: Dict[str, Any],
+    active_task_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """从持久化会话快照构建 planner 上下文，失败时返回 None。"""
+    try:
+        builder = PlannerContextBuilder(SessionRetrievalService(knowledge_manager))
+        return builder.build(
+            research_id=research_id,
+            session_id=session_id,
+            user_query=user_query,
+            task_tree=task_tree,
+            active_task_id=active_task_id,
+        ).model_dump()
+    except Exception:
+        return None
 
 
 async def run_planner(
@@ -375,9 +494,14 @@ async def run_planner(
     section_goals: List[Dict[str, Any]],
     section_evidence_packs: List[Dict[str, Any]],
     current_convergence_status: Optional[Dict[str, Any]] = None,
+    knowledge_manager: Any = None,
+    research_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    planner_context: Optional[Dict[str, Any]] = None,
+    research_depth: str = "standard",
     run_context: Any = None,
 ) -> PlannerRunResult:
-    """Graph-facing planner entry for the task-tree contract.
+    """执行基于规则的 planner，并产出任务更新与下一步动作决策。
 
     The current implementation is rule-based and deliberately replaceable. It
     makes task-level decisions from task_tree plus distiller signals; detailed
@@ -391,6 +515,23 @@ async def run_planner(
     patches = []
     new_task_ids: List[str] = []
     rationale_parts: List[str] = []
+    session_snapshot: Optional[Dict[str, Any]] = None
+
+    if planner_context is None and knowledge_manager is not None and research_id and session_id:
+        planner_context = _planner_context_from_snapshot(
+            knowledge_manager=knowledge_manager,
+            research_id=research_id,
+            session_id=session_id,
+            user_query=query,
+            task_tree=task_tree,
+            active_task_id=active_task_id,
+        )
+
+    if planner_context is None and knowledge_manager is not None and research_id and session_id:
+        try:
+            session_snapshot = knowledge_manager.get_session_snapshot(research_id, session_id)
+        except Exception:
+            session_snapshot = None
 
     if _is_initial_decomposition_needed(task_tree):
         initial_patches, initial_task_ids = _build_initial_decomposition(query, task_tree)
@@ -406,11 +547,20 @@ async def run_planner(
                     message="Planner proposed initial subtask.",
                 )
 
-    replanning_patches, replanned_task_ids = _build_replanning_patches(query, task_tree, distiller_outputs)
+    replanning_signals = dict(distiller_outputs or {})
+    if planner_context:
+        replanning_signals = {
+            "coverage_summary": planner_context.get("coverage_summary", {}),
+            "unresolved_gaps": [row.get("gap_text", "") for row in planner_context.get("unresolved_gaps", [])],
+            "conflict_ids": [row.get("id", "") for row in planner_context.get("conflict_hotspots", [])],
+            "evidence_ids": [row.get("id", "") for row in planner_context.get("relevant_evidence", [])],
+            "fact_ids": [row.get("id", "") for row in (session_snapshot or {}).get("facts", [])],
+        }
+    replanning_patches, replanned_task_ids = _build_replanning_patches(query, task_tree, replanning_signals)
     patches.extend(replanning_patches)
     new_task_ids.extend(replanned_task_ids)
     if replanned_task_ids:
-        rationale_parts.append(f"Added {len(replanned_task_ids)} follow-up task(s) from distiller signals.")
+        rationale_parts.append(f"Added {len(replanned_task_ids)} follow-up task(s) from session planning context.")
         if run_context:
             for task_id in replanned_task_ids:
                 observer.record_task_event(
@@ -429,11 +579,35 @@ async def run_planner(
     outline, generated_goals = _make_default_outline(query, report_outline)
     effective_section_goals = section_goals or generated_goals
 
-    coverage_summary = distiller_outputs.get("coverage_summary", {}) or {}
-    coverage = _coverage_score(knowledge_refs, section_evidence_packs, distiller_outputs)
-    conflict_count = len(distiller_outputs.get("conflict_ids", []))
-    gap_count = len(distiller_outputs.get("unresolved_gaps", []))
-    novelty_count = len(distiller_outputs.get("fact_ids", [])) + len(distiller_outputs.get("claim_ids", []))
+    coverage_summary = dict(
+        (planner_context or {}).get("coverage_summary")
+        or distiller_outputs.get("coverage_summary", {})
+        or {}
+    )
+    effective_packs = list((planner_context or {}).get("section_packs", []) or section_evidence_packs or [])
+    coverage = _coverage_score(
+        knowledge_refs,
+        effective_packs,
+        distiller_outputs,
+        session_snapshot,
+        planner_context,
+    )
+    conflict_count = (
+        len((planner_context or {}).get("conflict_hotspots", []))
+        if planner_context
+        else len(session_snapshot.get("conflicts", []))
+        if session_snapshot
+        else len(distiller_outputs.get("conflict_ids", []))
+    )
+    gap_count = len((planner_context or {}).get("unresolved_gaps", []) or distiller_outputs.get("unresolved_gaps", []))
+    novelty_count = (
+        int(((planner_context or {}).get("latest_novelty_snapshot", {}) or {}).get("new_fact_count", 0))
+        + int(((planner_context or {}).get("latest_novelty_snapshot", {}) or {}).get("new_claim_count", 0))
+        if planner_context and (planner_context.get("latest_novelty_snapshot") or {})
+        else len(session_snapshot.get("facts", [])) + len(session_snapshot.get("claims", []))
+        if session_snapshot
+        else len(distiller_outputs.get("fact_ids", [])) + len(distiller_outputs.get("claim_ids", []))
+    )
     pending_count = len(_pending_task_ids(draft_tree))
     completed_count = sum(1 for task in draft_tree.values() if task.get("status") == "completed")
     max_depth = max((int(task.get("depth", 0)) for task in draft_tree.values()), default=0)
@@ -450,6 +624,26 @@ async def run_planner(
             f"covered_sections={len(coverage_summary.get('covered_sections', []))}; "
             f"uncovered_sections={len(coverage_summary.get('uncovered_sections', []))}"
         )
+    if session_snapshot:
+        convergence_summary += (
+            f"; session_facts={len(session_snapshot.get('facts', []))}"
+            f"; session_evidence={len(session_snapshot.get('evidence', []))}"
+            f"; session_packs={len((planner_context or {}).get('section_packs', []) or session_snapshot.get('section_evidence_packs', []))}"
+        )
+    elif planner_context:
+        counts = dict((planner_context.get("retrieval_meta", {}) or {}).get("counts", {}) or {})
+        convergence_summary += (
+            f"; session_facts={counts.get('facts', 0)}"
+            f"; session_evidence={counts.get('evidence', 0)}"
+            f"; session_packs={counts.get('section_packs', 0)}"
+        )
+    ready_section_count = 0
+    if planner_context:
+        ready_section_count = len(planner_context.get("writing_ready_sections", []))
+        convergence_summary += (
+            f"; planner_context=active"
+            f"; ready_sections={ready_section_count}"
+        )
     if current_convergence_status:
         convergence_summary += f"; external={current_convergence_status}"
 
@@ -457,9 +651,21 @@ async def run_planner(
     action = PlannerAction.CONTINUE_RESEARCH.value
     stop_reason = None
 
-    if next_task_id:
+    if _writing_budget_reached(
+        research_depth=research_depth,
+        completed_count=completed_count,
+        ready_section_count=ready_section_count,
+        pack_count=len(effective_packs),
+        coverage=coverage,
+    ):
+        action = PlannerAction.START_WRITING.value
+        next_task_id = None
+        rationale_parts.append(
+            f"Research budget for {research_depth or 'standard'} depth reached and evidence is sufficient for a draft."
+        )
+    elif next_task_id:
         rationale_parts.append(f"Selected active task: {next_task_id}.")
-    elif coverage >= 0.35 or completed_count > 0 or section_evidence_packs:
+    elif coverage >= 0.35 or completed_count > 0 or effective_packs:
         action = PlannerAction.START_WRITING.value
         rationale_parts.append("No pending tasks remain and evidence is sufficient for a draft.")
     elif draft_tree:

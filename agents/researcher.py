@@ -8,8 +8,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
 
+from core.context_builders import ResearcherContextBuilder
 from core.observability import EventType, get_observer
-from providers import MCPGateway, build_scraper, resolve_scraper_mode
+from core.session_retrieval import SessionRetrievalService
+from providers import MCPGateway, MCPGatewayError, build_scraper, resolve_scraper_mode
 from schemas.state import ResearcherOutputs, ScrapedData, SearchResult
 
 
@@ -22,24 +24,19 @@ MIN_PASSAGE_TEXT_LENGTH = 80
 MIN_SCRAPED_TEXT_LENGTH = 200
 
 
-def _task_value(task: Any, field: str, default: Any = "") -> Any:
-    if task is None:
-        return default
-    if isinstance(task, dict):
-        return task.get(field, default)
-    return getattr(task, field, default)
-
-
 def _normalize_text(text: str) -> str:
+    """规范化文本中的空白字符并去除首尾空格。"""
     text = re.sub(r"\s+", " ", text or "").strip()
     return text
 
 
 def _tokenize(text: str) -> list[str]:
+    """将文本切分为英文单词或中文词块，供匹配和去重使用。"""
     return re.findall(r"[\w\u4e00-\u9fff]+", (text or "").lower())
 
 
 def _unique_preserve_order(values: Iterable[str]) -> list[str]:
+    """在保留原始顺序的前提下对字符串序列去重。"""
     seen: set[str] = set()
     result: list[str] = []
     for value in values:
@@ -53,16 +50,18 @@ def _unique_preserve_order(values: Iterable[str]) -> list[str]:
 
 
 def _source_id(url: str) -> str:
+    """根据 URL 生成稳定的来源 ID。"""
     return f"src_{hashlib.sha1(url.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _passage_id(task_id: Optional[str], url: str, index: int) -> str:
+    """根据任务、URL 和序号生成稳定的段落 ID。"""
     base = f"{task_id or 'task'}:{url}:{index}"
     return f"passage_{hashlib.sha1(base.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _query_embedding(text: str, dimensions: int = 64) -> list[float]:
-    """Deterministic local embedding fallback for admission-time deduplication."""
+    """生成确定性的本地向量表示，用于查询准入阶段的去重。"""
     vector = [0.0] * dimensions
     for token in _tokenize(text):
         digest = hashlib.sha1(token.encode("utf-8")).digest()
@@ -76,12 +75,14 @@ def _query_embedding(text: str, dimensions: int = 64) -> list[float]:
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    """计算两个向量的余弦相似度。"""
     if not left or not right or len(left) != len(right):
         return 0.0
     return sum(a * b for a, b in zip(left, right))
 
 
 def _heuristic_relevance_score(query: str, root_user_query: str) -> int:
+    """使用词项重叠启发式估算候选查询与根问题的相关度。"""
     query_tokens = set(_tokenize(query))
     root_tokens = set(_tokenize(root_user_query))
     if not query_tokens or not root_tokens:
@@ -93,11 +94,7 @@ def _heuristic_relevance_score(query: str, root_user_query: str) -> int:
 
 
 async def _score_query_relevance(query: str, root_user_query: str) -> tuple[int, str]:
-    """Score query admission with an LLM prompt when explicitly enabled, else fallback.
-
-    The prompt contract is kept here so the scoring implementation can be swapped
-    without changing the researcher output contract.
-    """
+    """为候选查询打分；启用 LLM 时走模型评分，否则回退到启发式规则。"""
     prompt = f"""Score the relevance between the candidate retrieval query and the root research question.
 
 Root research question:
@@ -139,11 +136,12 @@ Return only one integer from 1 to 10:
     return _heuristic_relevance_score(query, root_user_query), "heuristic"
 
 
-def _generate_candidate_queries(task: Any) -> list[str]:
-    query = _normalize_text(str(_task_value(task, "query", "")))
-    title = _normalize_text(str(_task_value(task, "title", "")))
-    rationale = _normalize_text(str(_task_value(task, "rationale", "")))
-    node_type = str(_task_value(task, "node_type", "") or "").lower()
+def _generate_candidate_queries(task: Dict[str, Any]) -> list[str]:
+    """根据任务内容和类型生成一组候选检索查询。"""
+    query = _normalize_text(str(task.get("query", "")))
+    title = _normalize_text(str(task.get("title", "")))
+    rationale = _normalize_text(str(task.get("rationale", "")))
+    node_type = str(task.get("node_type", "") or "").lower()
 
     rationale_terms = " ".join(_tokenize(rationale)[:10])
     candidates = [
@@ -165,20 +163,53 @@ def _generate_candidate_queries(task: Any) -> list[str]:
     return _unique_preserve_order(candidates)
 
 
-def _collect_existing_source_keys(task: Any, knowledge_refs: Any) -> set[str]:
+def _collect_existing_source_keys(
+    task: Dict[str, Any],
+    knowledge_refs: Optional[Dict[str, Any]],
+    session_snapshot: Optional[Dict[str, Any]] = None,
+    research_context: Optional[Dict[str, Any]] = None,
+) -> set[str]:
+    """汇总已使用来源的 ID 和 URL 键，避免重复抓取。"""
     keys: set[str] = set()
-    for value in _task_value(task, "source_span_ids", []) or []:
+    for value in task.get("source_span_ids", []) or []:
         keys.add(str(value).lower())
-    if isinstance(knowledge_refs, dict):
-        source_ids = knowledge_refs.get("source_ids", [])
-    else:
-        source_ids = getattr(knowledge_refs, "source_ids", [])
+    source_ids = list((knowledge_refs or {}).get("source_ids", []))
+    if research_context:
+        source_ids = list(research_context.get("already_seen_source_ids", [])) + source_ids
+    if session_snapshot:
+        source_ids = list(session_snapshot.get("knowledge_refs", {}).get("source_ids", [])) + source_ids
     for value in source_ids or []:
         keys.add(str(value).lower())
+    for value in (research_context or {}).get("already_seen_source_urls", []) or []:
+        keys.add(str(value).lower().rstrip("/"))
     return keys
 
 
+def _research_context_from_snapshot(
+    *,
+    knowledge_manager: Any,
+    research_id: str,
+    session_id: str,
+    root_user_query: str,
+    task_id: Optional[str],
+    task: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """从持久化会话数据构建 researcher 上下文，失败时返回 None。"""
+    try:
+        builder = ResearcherContextBuilder(SessionRetrievalService(knowledge_manager))
+        return builder.build(
+            research_id=research_id,
+            session_id=session_id,
+            root_user_query=root_user_query,
+            task_id=task_id,
+            task=task,
+        ).model_dump()
+    except Exception:
+        return None
+
+
 def _result_to_source(result: SearchResult, *, query: str, task_id: Optional[str]) -> dict[str, Any]:
+    """将搜索结果转换为统一的来源记录结构。"""
     source_id = _source_id(result.url)
     return {
         "source_id": source_id,
@@ -203,6 +234,7 @@ def _make_passage(
     index: int,
     extraction_method: str,
 ) -> dict[str, Any]:
+    """把抓取或检索得到的文本整理为 passage 结构。"""
     return {
         "passage_id": _passage_id(task_id, url, index),
         "task_id": task_id,
@@ -216,6 +248,7 @@ def _make_passage(
 
 
 def _emit_task_event(run_context: Any, event_type: EventType, task_id: Optional[str], message: str, payload: dict[str, Any]) -> None:
+    """在存在运行上下文时记录 researcher 相关事件。"""
     if run_context is None:
         return
     get_observer().record_task_event(
@@ -228,13 +261,50 @@ def _emit_task_event(run_context: Any, event_type: EventType, task_id: Optional[
 
 
 def _resolve_search_mode(mode: Optional[str], scraper_mode: str) -> str:
+    """解析最终搜索模式，并与抓取器模式保持兼容。"""
     candidate = (mode or os.getenv("RESEARCHER_SEARCH_MODE", "")).strip().lower()
     if not candidate:
         return "mock" if scraper_mode == "mock" else "live"
     return candidate if candidate in {"live", "mock"} else "live"
 
 
+def _format_exception(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return f"{type(exc).__name__}: {exc!r}"
+
+
+def _is_recoverable_search_error(exc: Exception) -> bool:
+    if isinstance(exc, MCPGatewayError):
+        return bool(exc.retryable)
+    error_text = _format_exception(exc)
+    fatal_markers = (
+        "TAVILY_API_KEY",
+        "HTTP error: 400",
+        "HTTP error: 401",
+        "HTTP error: 403",
+        "Illegal header value",
+    )
+    if any(marker in error_text for marker in fatal_markers):
+        return False
+    recoverable_markers = (
+        "ReadTimeout",
+        "ConnectTimeout",
+        "ConnectError",
+        "RemoteProtocolError",
+        "PoolTimeout",
+        "HTTP error: 429",
+        "HTTP error: 500",
+        "HTTP error: 502",
+        "HTTP error: 503",
+        "HTTP error: 504",
+    )
+    return any(marker in error_text for marker in recoverable_markers)
+
+
 def _mock_search(query: str, max_results: int = 5) -> list[SearchResult]:
+    """生成稳定可复现的 mock 搜索结果，用于离线测试。"""
     base = hashlib.sha1(query.encode("utf-8")).hexdigest()[:8]
     results: list[SearchResult] = []
     for index in range(max_results):
@@ -258,7 +328,11 @@ async def run_researcher(
     task_id: Optional[str],
     task: Optional[Dict[str, Any]],
     root_user_query: str = "",
-    knowledge_refs: Any = None,
+    knowledge_refs: Optional[Dict[str, Any]] = None,
+    knowledge_manager: Any = None,
+    research_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    research_context: Optional[Dict[str, Any]] = None,
     run_context: Any = None,
     max_query_per_task: int = MAX_QUERY_PER_TASK,
     max_search_iterations: int = MAX_SEARCH_ITERATIONS,
@@ -270,11 +344,7 @@ async def run_researcher(
     search_gateway: Optional[MCPGateway] = None,
     scraper_fixtures: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> ResearcherOutputs:
-    """Graph-facing researcher entry.
-
-    Researcher owns retrieval exploration only. It reads the planner-selected
-    task and returns raw search/source/passage materials for distillation.
-    """
+    """执行检索探索流程，并返回供 distiller 使用的原始材料。"""
     if not task_id or not task:
         return ResearcherOutputs(
             task_id=task_id,
@@ -283,7 +353,7 @@ async def run_researcher(
         )
 
     root_query = _normalize_text(root_user_query or getattr(run_context, "root_query", ""))
-    task_query = _normalize_text(str(_task_value(task, "query", "")))
+    task_query = _normalize_text(str(task.get("query", "")))
     if not root_query:
         root_query = task_query
 
@@ -299,6 +369,7 @@ async def run_researcher(
         "rejected_queries": [],
         "duplicate_queries": [],
         "rejected_sources": [],
+        "search_errors": [],
         "follow_up_hints": [],
         "scoring_methods": [],
         "iterations": 0,
@@ -362,7 +433,41 @@ async def run_researcher(
     metadata["scraper_mode"] = getattr(scraper, "mode", effective_scraper_mode)
     metadata["search_mode"] = effective_search_mode
 
-    used_source_keys = _collect_existing_source_keys(task, knowledge_refs)
+    session_snapshot: Optional[Dict[str, Any]] = None
+    if research_context is None and knowledge_manager is not None and research_id and session_id:
+        research_context = _research_context_from_snapshot(
+            knowledge_manager=knowledge_manager,
+            research_id=research_id,
+            session_id=session_id,
+            root_user_query=root_query,
+            task_id=task_id,
+            task=task,
+        )
+    if research_context is None and knowledge_manager is not None and research_id and session_id:
+        try:
+            session_snapshot = knowledge_manager.get_session_snapshot(research_id, session_id)
+        except Exception:
+            session_snapshot = None
+
+    used_source_keys = _collect_existing_source_keys(task, knowledge_refs, session_snapshot, research_context)
+    if research_context:
+        metadata["session_knowledge"] = {
+            "fact_count": len(research_context.get("relevant_facts", [])),
+            "evidence_count": len((session_snapshot or {}).get("evidence", [])),
+            "source_count": len(research_context.get("already_seen_source_ids", [])),
+            "gap_count": len(research_context.get("unresolved_gaps", [])),
+            "context_source": "research_context",
+        }
+        metadata["follow_up_hints"] = [
+            *(f"Investigate gap: {row.get('gap_text', '')}" for row in research_context.get("unresolved_gaps", [])[:3]),
+            *(f"Seek {item}" for item in research_context.get("authority_gaps", [])[:2]),
+        ]
+    elif session_snapshot:
+        metadata["session_knowledge"] = {
+            "fact_count": len(session_snapshot.get("facts", [])),
+            "evidence_count": len(session_snapshot.get("evidence", [])),
+            "source_count": len(session_snapshot.get("knowledge_refs", {}).get("source_ids", [])),
+        }
     seen_urls: set[str] = set()
     accepted_sources: list[dict[str, Any]] = []
     passages: list[dict[str, Any]] = []
@@ -379,7 +484,29 @@ async def run_researcher(
         if effective_search_mode == "mock":
             search_results = _mock_search(query, max_results=max_sources_per_query)
         else:
-            search_results = await gateway.search(query, max_results=max_sources_per_query, provider="tavily")
+            try:
+                search_results = await gateway.search(query, max_results=max_sources_per_query, provider="tavily")
+            except Exception as exc:
+                recoverable = _is_recoverable_search_error(exc)
+                search_error = {
+                    "query": query,
+                    "provider": "tavily",
+                    "error": _format_exception(exc),
+                    "recoverable": recoverable,
+                    "attempts": getattr(exc, "attempts", None),
+                    "status_code": getattr(exc, "status_code", None),
+                }
+                metadata["search_errors"].append(search_error)
+                _emit_task_event(
+                    run_context,
+                    EventType.QUERY_REJECTED,
+                    task_id,
+                    "Researcher skipped query after recoverable search provider error." if recoverable else "Researcher hit fatal search provider error.",
+                    search_error,
+                )
+                if recoverable:
+                    continue
+                raise
         search_results_cache.extend(search_results)
 
         candidate_sources: list[dict[str, Any]] = []
@@ -493,14 +620,18 @@ async def run_researcher(
             break
 
     if not metadata["stop_reason"]:
-        if not admitted_queries:
+        if metadata["search_errors"] and not accepted_sources and not passages:
+            metadata["stop_reason"] = "search_errors_exhausted"
+            metadata["recoverable_failure"] = all(item.get("recoverable") for item in metadata["search_errors"])
+        elif not admitted_queries:
             metadata["stop_reason"] = "no_admitted_queries"
         elif metadata["iterations"] >= max_search_iterations:
             metadata["stop_reason"] = "max_search_iterations_reached"
         else:
             metadata["stop_reason"] = "query_budget_exhausted"
 
-    metadata["follow_up_hints"] = _derive_follow_up_hints(accepted_sources, task_query)
+    derived_hints = _derive_follow_up_hints(accepted_sources, task_query)
+    metadata["follow_up_hints"] = list(metadata.get("follow_up_hints", [])) + derived_hints
     _emit_task_event(
         run_context,
         EventType.EXPLORATION_STOPPED,
@@ -535,6 +666,7 @@ async def run_researcher(
 
 
 def _derive_follow_up_hints(sources: list[dict[str, Any]], task_query: str) -> list[str]:
+    """从已接受来源标题中提取可能的后续检索提示词。"""
     hints: list[str] = []
     task_tokens = set(_tokenize(task_query))
     for source in sources:

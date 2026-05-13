@@ -1,6 +1,6 @@
 import asyncio
 from typing import List, Any
-from core.knowledge import KnowledgeManager
+from core.session_knowledge import KnowledgeManager
 from core.config import ResearchConfig
 
 

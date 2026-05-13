@@ -1,9 +1,34 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List
 
+from core.context_builders import WriterContextBuilder
 from core.observability import EventType, get_observer
+from core.session_retrieval import SessionRetrievalService
 from schemas.state import FinalReport
+
+
+def _writer_context_from_snapshot(
+    *,
+    knowledge_manager: Any,
+    research_id: str,
+    session_id: str,
+    report_outline: Dict[str, Any],
+    section_goals: List[Dict[str, Any]],
+    section_evidence_packs: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    """从持久化会话数据构建 writer 上下文，失败时返回 None。"""
+    try:
+        builder = WriterContextBuilder(SessionRetrievalService(knowledge_manager))
+        return builder.build(
+            research_id=research_id,
+            session_id=session_id,
+            report_outline=report_outline,
+            section_goals=section_goals,
+            fallback_section_packs=section_evidence_packs,
+        ).model_dump()
+    except Exception:
+        return None
 
 
 async def run_writer(
@@ -11,15 +36,13 @@ async def run_writer(
     report_outline: Dict[str, Any],
     section_goals: List[Dict[str, Any]],
     section_evidence_packs: List[Dict[str, Any]],
+    knowledge_manager: Any = None,
+    research_id: str = "",
+    session_id: str = "",
+    writer_context: Dict[str, Any] | None = None,
     run_context: Any = None,
 ) -> FinalReport:
-    """Graph-facing writer entry.
-
-    Writer is intentionally downstream of stable writing inputs only:
-    `report_outline`, `section_goals`, and `section_evidence_packs`.
-    It should not depend on raw passages, planner hints, or distiller debug
-    metadata once the full writer is implemented.
-    """
+    """根据大纲和证据包生成最终报告 Markdown。"""
     observer = get_observer()
     if run_context is not None:
         observer.record_run_event(
@@ -27,6 +50,31 @@ async def run_writer(
             EventType.WRITER_STARTED,
             message="Writer started evidence-based report generation.",
         )
+
+    session_snapshot: dict[str, Any] | None = None
+    if writer_context is None and knowledge_manager is not None and research_id and session_id:
+        writer_context = _writer_context_from_snapshot(
+            knowledge_manager=knowledge_manager,
+            research_id=research_id,
+            session_id=session_id,
+            report_outline=report_outline,
+            section_goals=section_goals,
+            section_evidence_packs=section_evidence_packs,
+        )
+    if writer_context is None and knowledge_manager is not None and research_id and session_id:
+        try:
+            session_snapshot = knowledge_manager.get_session_snapshot(research_id, session_id)
+        except Exception:
+            session_snapshot = None
+
+    effective_packs = list(section_evidence_packs or [])
+    context_source = "state_fallback"
+    if writer_context:
+        effective_packs = list(writer_context.get("section_evidence_packs", []) or effective_packs)
+        context_source = str(writer_context.get("context_source", "session_context"))
+    elif session_snapshot:
+        effective_packs = list(session_snapshot.get("section_evidence_packs", []))
+        context_source = "session_snapshot"
 
     sections = list((report_outline or {}).get("sections", []) or [])
     if not sections and section_goals:
@@ -42,28 +90,38 @@ async def run_writer(
 
     title = str((report_outline or {}).get("title", "") or "Research Report").strip() or "Research Report"
     goals_by_section = {str(goal.get("section_id", "")): goal for goal in section_goals}
-    packs_by_section = {str(pack.get("section_id", "")): pack for pack in section_evidence_packs}
-
     section_markdown_blocks: list[str] = []
     section_ids: list[str] = []
     evidence_pack_ids: list[str] = []
     citation_map: dict[str, list[str]] = {}
 
-    executive_summary = _build_executive_summary(sections, packs_by_section, goals_by_section)
-    if executive_summary:
-        section_markdown_blocks.append("## Executive Summary\n\n" + executive_summary)
-
     ordered_sections = sorted(
         sections,
         key=lambda item: int(item.get("order", 9999) or 9999),
     )
+    packs_by_section = {str(pack.get("section_id", "")): pack for pack in effective_packs}
+    contexts_by_section = {
+        str(item.get("section_id", "")): item
+        for item in (writer_context or {}).get("section_contexts", [])
+        if str(item.get("section_id", ""))
+    }
+    for section in ordered_sections:
+        section_id = str(section.get("section_id", ""))
+        if not _pack_has_refs(packs_by_section.get(section_id, {})):
+            fallback_pack = _pack_from_section_context(contexts_by_section.get(section_id, {}))
+            if _pack_has_refs(fallback_pack):
+                packs_by_section[section_id] = fallback_pack
+
+    executive_summary = _build_executive_summary(ordered_sections, packs_by_section)
+    if executive_summary:
+        section_markdown_blocks.append("## Executive Summary\n\n" + executive_summary)
+
     for index, section in enumerate(ordered_sections, start=1):
         section_id = str(section.get("section_id", f"section_{index}"))
         goal = goals_by_section.get(section_id, {})
         pack = packs_by_section.get(section_id, {})
         section_markdown, used_refs = _render_section(
             title=str(section.get("title", f"Section {index}")),
-            section_id=section_id,
             goal_text=str(goal.get("goal", "") or section.get("goal", "")),
             pack=pack,
         )
@@ -107,23 +165,68 @@ async def run_writer(
             payload={
                 "section_count": len(section_ids),
                 "report_length": len(markdown),
+                "context_source": context_source,
             },
         )
 
     return report
 
 
+def _pack_has_refs(pack: Dict[str, Any]) -> bool:
+    return any(pack.get(key) for key in ("claim_ids", "fact_ids", "evidence_ids", "conflict_ids"))
+
+
+def _ids_from(items: Iterable[Any], id_key: str) -> list[str]:
+    refs: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            value = str(item.get("id") or item.get(id_key) or "").strip()
+        else:
+            value = str(getattr(item, "id", "") or getattr(item, id_key, "") or "").strip()
+        if value:
+            refs.append(value)
+    return _dedupe_refs(refs)
+
+
+def _pack_from_section_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    if not context:
+        return {}
+    claims = list(context.get("claims", []) or [])
+    facts = list(context.get("facts", []) or [])
+    evidence = list(context.get("evidence", []) or [])
+    conflicts = list(context.get("conflicts", []) or [])
+    claim_ids = _ids_from(claims, "claim_id")
+    fact_ids = _ids_from(facts, "fact_id")
+    evidence_ids = _ids_from(evidence, "evidence_id")
+    conflict_ids = _ids_from(conflicts, "conflict_id")
+    coverage_score = min(1.0, 0.2 * len(claim_ids) + 0.1 * len(evidence_ids) + 0.05 * len(fact_ids))
+    return {
+        "pack_id": str((context.get("pack") or {}).get("pack_id") or ""),
+        "section_id": str(context.get("section_id", "")),
+        "claim_ids": claim_ids,
+        "fact_ids": fact_ids,
+        "evidence_ids": evidence_ids,
+        "conflict_ids": conflict_ids,
+        "claims": claims,
+        "facts": facts,
+        "evidence": evidence,
+        "conflicts": conflicts,
+        "coverage_score": coverage_score,
+        "notes": "Recovered section support from session retrieval context.",
+    }
+
+
 def _as_strings(items: Iterable[Any]) -> list[str]:
     values: list[str] = []
     for item in items:
-        if isinstance(item, str):
-            text = item.strip()
-        elif isinstance(item, dict):
+        if isinstance(item, dict):
             text = str(
                 item.get("text")
+                or item.get("canonical_text")
                 or item.get("summary")
+                or item.get("summary_text")
                 or item.get("quote")
-                or item.get("id")
+                or item.get("quote_text")
                 or ""
             ).strip()
         else:
@@ -133,27 +236,9 @@ def _as_strings(items: Iterable[Any]) -> list[str]:
     return values
 
 
-def _ref_ids(prefix: str, items: Iterable[Any]) -> list[str]:
-    refs: list[str] = []
-    for item in items:
-        if isinstance(item, str):
-            value = item.strip()
-        elif isinstance(item, dict):
-            value = str(item.get("id") or item.get(f"{prefix}_id") or "").strip()
-        else:
-            value = ""
-        if value:
-            refs.append(value)
-    return refs
-
-
 def _format_refs(refs: Iterable[str]) -> str:
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for ref in refs:
-        if ref and ref not in seen:
-            seen.add(ref)
-            deduped.append(ref)
+    """将引用 ID 列表格式化为文内引用标记。"""
+    deduped = _dedupe_refs(refs)
     if not deduped:
         return ""
     return " " + " ".join(f"[{ref}]" for ref in deduped[:6])
@@ -162,8 +247,8 @@ def _format_refs(refs: Iterable[str]) -> str:
 def _build_executive_summary(
     sections: List[Dict[str, Any]],
     packs_by_section: Dict[str, Dict[str, Any]],
-    goals_by_section: Dict[str, Dict[str, Any]],
 ) -> str:
+    """根据各小节证据覆盖情况生成执行摘要文本。"""
     lines: list[str] = []
     for section in sections[:4]:
         section_id = str(section.get("section_id", ""))
@@ -192,53 +277,57 @@ def _build_executive_summary(
 def _render_section(
     *,
     title: str,
-    section_id: str,
     goal_text: str,
     pack: Dict[str, Any],
 ) -> tuple[str, list[str]]:
-    claims = pack.get("claims", []) or []
-    facts = pack.get("facts", []) or pack.get("atomic_facts", []) or []
-    evidence = pack.get("evidence", []) or []
-    claim_texts = _as_strings(claims)
-    fact_texts = _as_strings(facts)
-    evidence_texts = _as_strings(evidence)
-    claim_ids = list(pack.get("claim_ids", []) or []) + _ref_ids("claim", claims)
-    fact_ids = list(pack.get("fact_ids", []) or []) + _ref_ids("fact", facts)
-    evidence_ids = list(pack.get("evidence_ids", []) or []) + _ref_ids("evidence", evidence)
+    """渲染单个报告小节，并返回所使用的引用 ID。"""
+    claim_ids = list(pack.get("claim_ids", []) or [])
+    fact_ids = list(pack.get("fact_ids", []) or [])
+    evidence_ids = list(pack.get("evidence_ids", []) or [])
     conflict_ids = list(pack.get("conflict_ids", []) or [])
+    claim_texts = _as_strings(pack.get("claims", []) or [])
+    fact_texts = _as_strings(pack.get("facts", []) or [])
     coverage = float(pack.get("coverage_score", 0.0) or 0.0)
+    claim_count = len(claim_ids)
+    fact_count = len(fact_ids)
+    evidence_count = len(evidence_ids)
 
     paragraphs: list[str] = [f"## {title}"]
     if goal_text:
         paragraphs.append(f"{goal_text.strip()}.")
 
-    if claim_texts:
-        primary_claims = claim_texts[:3]
-        paragraphs.append(
-            "Available evidence suggests "
-            + "; ".join(_sentence_case(text.rstrip(". ")) for text in primary_claims)
-            + "."
-            + _format_refs(claim_ids[:3] + evidence_ids[:2])
+    if claim_count > 0:
+        summary = (
+            f"This section is supported by {claim_count} distilled claim(s), "
+            f"{fact_count} atomic fact(s), and {evidence_count} evidence item(s)."
         )
-    elif fact_texts:
+        if coverage >= 0.6:
+            summary += " The available material is strong enough to support a reasonably confident synthesis."
+        elif coverage >= 0.35:
+            summary += " The current material supports a provisional synthesis, but some conclusions remain tentative."
+        else:
+            summary += " Coverage remains thin, so conclusions should be treated cautiously."
         paragraphs.append(
-            "The available material supports the following factual points: "
-            + "; ".join(_sentence_case(text.rstrip(". ")) for text in fact_texts[:3])
-            + "."
-            + _format_refs(fact_ids[:3] + evidence_ids[:2])
+            summary + _format_refs(claim_ids[:3] + fact_ids[:2] + evidence_ids[:2])
         )
+        if claim_texts:
+            paragraphs.append("Representative claims: " + "; ".join(text.rstrip(". ") for text in claim_texts[:3]) + ".")
+    elif fact_count > 0 or evidence_count > 0:
+        if fact_texts:
+            paragraphs.append(
+                "The available material supports these factual points: "
+                + "; ".join(text.rstrip(". ") for text in fact_texts[:3])
+                + "."
+                + _format_refs(fact_ids[:3] + evidence_ids[:2])
+            )
+        else:
+            paragraphs.append(
+                "This section has limited structured support, so the draft relies on a sparse evidence base rather than a dense factual record."
+                + _format_refs(fact_ids[:3] + evidence_ids[:2])
+            )
     else:
         paragraphs.append(
             "Evidence for this section remains limited, so only a cautious summary can be provided."
-            + _format_refs(evidence_ids[:2])
-        )
-
-    if evidence_texts:
-        paragraphs.append(
-            "Supporting evidence includes "
-            + "; ".join(_sentence_case(text.rstrip(". ")) for text in evidence_texts[:2])
-            + "."
-            + _format_refs(evidence_ids[:3])
         )
 
     if conflict_ids:
@@ -267,6 +356,7 @@ def _build_open_questions(
     sections: List[Dict[str, Any]],
     packs_by_section: Dict[str, Dict[str, Any]],
 ) -> str:
+    """根据覆盖不足或冲突情况生成开放问题列表。"""
     bullets: list[str] = []
     for section in sections:
         section_id = str(section.get("section_id", ""))
@@ -282,6 +372,7 @@ def _build_open_questions(
 
 
 def _dedupe_refs(refs: Iterable[str]) -> list[str]:
+    """按原始顺序去重引用 ID。"""
     seen: set[str] = set()
     deduped: list[str] = []
     for ref in refs:
@@ -289,10 +380,3 @@ def _dedupe_refs(refs: Iterable[str]) -> list[str]:
             seen.add(ref)
             deduped.append(ref)
     return deduped
-
-
-def _sentence_case(text: str) -> str:
-    text = (text or "").strip()
-    if not text:
-        return text
-    return text[0].upper() + text[1:]
