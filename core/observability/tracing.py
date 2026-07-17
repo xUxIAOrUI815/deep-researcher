@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
+import json
+from pathlib import Path
 import uuid
 from typing import Any, Optional, Protocol
 
@@ -51,6 +53,8 @@ class EventType(str, Enum):
     WRITER_STARTED = "writer.started"
     SECTION_GENERATED = "section.generated"
     WRITER_COMPLETED = "writer.completed"
+    CITATION_RESOLVED = "writer.citation_resolved"
+    CITATION_UNRESOLVED = "writer.citation_unresolved"
 
 
 @dataclass
@@ -67,6 +71,7 @@ class ObservabilityEvent:
     parent_span_id: Optional[str] = None
     node_name: Optional[str] = None
     agent_name: Optional[str] = None
+    phase: str = ""
     task_id: Optional[str] = None
     source_id: Optional[str] = None
     fact_id: Optional[str] = None
@@ -76,6 +81,9 @@ class ObservabilityEvent:
     section_id: Optional[str] = None
     message: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    error: Optional[dict[str, Any]] = None
+    state_version: Optional[int] = None
 
     @classmethod
     def from_context(
@@ -105,6 +113,10 @@ class ObservabilityEvent:
         data["event_type"] = self.event_type.value
         data["level"] = self.level.value
         data["timestamp"] = self.timestamp.isoformat()
+        data["node"] = self.node_name
+        data["agent"] = self.agent_name
+        if not data.get("phase"):
+            data["phase"] = _phase_for_event(self.event_type)
         return data
 
 
@@ -244,6 +256,51 @@ class NoopObserver:
                 payload=payload,
             )
         )
+
+
+def _phase_for_event(event_type: EventType) -> str:
+    value = event_type.value
+    if value.startswith("run."):
+        return "run"
+    if value.startswith("node."):
+        return "node"
+    if value.startswith("task."):
+        return "planning"
+    if value.startswith("query.") or value.startswith("source.") or value.startswith("exploration."):
+        return "research"
+    if value.startswith("distill.") or value.startswith("passage.") or value.startswith("claim.") or value.startswith("fact.") or value.startswith("evidence"):
+        return "distillation"
+    if value.startswith("writer.") or value.startswith("section.") or value.startswith("report."):
+        return "writing"
+    if value.startswith("conflict.") or value.startswith("compression."):
+        return "distillation"
+    return "unknown"
+
+
+class JsonlObserver(NoopObserver):
+    """Observer that appends one JSON event per line under event_dir."""
+
+    def __init__(self, event_dir: str | Path = ".console_runtime/events") -> None:
+        self.event_dir = Path(event_dir)
+        self.event_dir.mkdir(parents=True, exist_ok=True)
+
+    def emit(self, event: ObservabilityEvent) -> None:
+        research_id = event.research_id or "unknown"
+        self.event_dir.mkdir(parents=True, exist_ok=True)
+        path = self.event_dir / f"{research_id}.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event.to_dict(), ensure_ascii=False, default=str) + "\n")
+
+
+class CompositeObserver(NoopObserver):
+    """Fan out events to multiple observers without coupling call sites."""
+
+    def __init__(self, observers: list[Observer]) -> None:
+        self.observers = list(observers)
+
+    def emit(self, event: ObservabilityEvent) -> None:
+        for observer in self.observers:
+            observer.emit(event)
 
 
 _observer: Observer = NoopObserver()

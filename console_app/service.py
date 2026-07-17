@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import core.graph as graph_module
 from core.context_builders import PlannerContextBuilder, ResearcherContextBuilder, WriterContextBuilder
-from core.observability import EventLevel, EventType, NoopObserver, ObservabilityEvent, set_observer
+from core.observability import CompositeObserver, EventLevel, EventType, JsonlObserver, NoopObserver, ObservabilityEvent, get_observer, set_observer
 from core.run_context import RunContext
 from core.session_knowledge import KnowledgeManager
 from core.session_retrieval import SessionRetrievalService
@@ -75,7 +75,16 @@ class ResearchConsoleService:
         self._run_tasks: set[asyncio.Task[Any]] = set()
         self._closed = False
         self.observer = MemoryObserver()
-        set_observer(self.observer)
+        self.jsonl_observer = JsonlObserver(self.runtime_dir / "events")
+        self._previous_observer = get_observer()
+        set_observer(CompositeObserver([self.observer, self.jsonl_observer]))
+        self._previous_graph_bindings = {
+            "SESSION_KNOWLEDGE_MANAGER": graph_module.SESSION_KNOWLEDGE_MANAGER,
+            "SESSION_RETRIEVAL_SERVICE": graph_module.SESSION_RETRIEVAL_SERVICE,
+            "PLANNER_CONTEXT_BUILDER": graph_module.PLANNER_CONTEXT_BUILDER,
+            "RESEARCHER_CONTEXT_BUILDER": graph_module.RESEARCHER_CONTEXT_BUILDER,
+            "WRITER_CONTEXT_BUILDER": graph_module.WRITER_CONTEXT_BUILDER,
+        }
         graph_module.SESSION_KNOWLEDGE_MANAGER = self.knowledge_manager
         graph_module.SESSION_RETRIEVAL_SERVICE = self.retrieval_service
         graph_module.PLANNER_CONTEXT_BUILDER = self.planner_context_builder
@@ -127,6 +136,9 @@ class ResearchConsoleService:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self._run_tasks.clear()
+        set_observer(self._previous_observer)
+        for name, value in self._previous_graph_bindings.items():
+            setattr(graph_module, name, value)
         self.knowledge_manager.close()
 
     async def _execute_run(self, handle: RunHandle) -> None:
