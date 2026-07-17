@@ -45,3 +45,6 @@ tmp_km_check/
 tmp_km_check2/
 tmp_sqlite_check/
 tests/.tmp/
+pytest-cache-files-*/
+console_stdout.log
+console_stderr.log

@@ -30,7 +30,7 @@ from agents.writer import run_writer
 from core.context_builders import PlannerContextBuilder, ResearcherContextBuilder, WriterContextBuilder
 from core.session_knowledge import KnowledgeManager
 from core.session_retrieval import SessionRetrievalService
-from core.observability import EventType, get_observer
+from core.observability import EventLevel, EventType, ObservabilityEvent, get_observer
 from core.run_context import RunContext
 from schemas.state import (
     DistillerOutputs,
@@ -122,6 +122,60 @@ def _append_state_event(
     )
     if len(events) > 50:
         del events[:-50]
+
+
+def _error_payload(exc: Exception) -> dict[str, str]:
+    """Return a small, serializable error payload for failed graph events."""
+    return {
+        "type": type(exc).__name__,
+        "message": str(exc),
+    }
+
+
+def _record_node_failure(
+    state: GraphState,
+    context: RunContext,
+    node_name: str,
+    exc: Exception,
+) -> None:
+    """Record node.failed and run.failed before preserving the original failure."""
+    observer = get_observer()
+    error = _error_payload(exc)
+    observer.emit(
+        ObservabilityEvent.from_context(
+            context,
+            EventType.NODE_FAILED,
+            level=EventLevel.ERROR,
+            node_name=node_name,
+            message=f"{node_name} node failed.",
+            payload={"node": node_name},
+            error=error,
+        )
+    )
+    _append_state_event(
+        state,
+        "node.failed",
+        f"{node_name} node failed.",
+        {"node": node_name, "error": error},
+    )
+
+    if not any(event.get("event_type") == "run.failed" for event in state.get("state_events", [])):
+        observer.emit(
+            ObservabilityEvent.from_context(
+                context,
+                EventType.RUN_FAILED,
+                level=EventLevel.ERROR,
+                message=f"Research run failed in {node_name}.",
+                payload={"failed_node": node_name},
+                error=error,
+            )
+        )
+        _append_state_event(
+            state,
+            "run.failed",
+            f"Research run failed in {node_name}.",
+            {"failed_node": node_name, "error": error},
+        )
 
 
 def _ensure_state_defaults(state: GraphState, config: Optional[Any] = None) -> RunContext:
@@ -610,14 +664,35 @@ def should_continue(state: GraphState) -> str:
     return "researcher"
 
 
+async def _run_node_with_failure_events(
+    node_name: str,
+    node_func: Any,
+    state: GraphState,
+    config: Optional[RunnableConfig] = None,
+) -> GraphState:
+    try:
+        return await node_func(state, config)
+    except Exception as exc:
+        context = _ensure_state_defaults(state, config)
+        _record_node_failure(state, context, node_name, exc)
+        raise
+
+
+def _node_with_failure_events(node_name: str, node_func: Any) -> Any:
+    async def wrapped(state: GraphState, config: Optional[RunnableConfig] = None) -> GraphState:
+        return await _run_node_with_failure_events(node_name, node_func, state, config)
+
+    return wrapped
+
+
 def create_research_graph(checkpointer: AsyncSqliteSaver) -> StateGraph:
     """构建 v2 研究图：planner 与 researcher/distiller 循环，最终进入 writer。"""
     workflow = StateGraph(ResearchGraphState)
 
-    workflow.add_node("planner", planner)
-    workflow.add_node("researcher", researcher_async)
-    workflow.add_node("distiller", distiller_async)
-    workflow.add_node("writer", writer_async)
+    workflow.add_node("planner", _node_with_failure_events("planner", planner))
+    workflow.add_node("researcher", _node_with_failure_events("researcher", researcher_async))
+    workflow.add_node("distiller", _node_with_failure_events("distiller", distiller_async))
+    workflow.add_node("writer", _node_with_failure_events("writer", writer_async))
 
     workflow.set_entry_point("planner")
 

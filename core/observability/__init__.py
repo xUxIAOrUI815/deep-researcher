@@ -1,6 +1,8 @@
 from .tracing import (
     EventLevel,
     EventType,
+    CompositeObserver,
+    JsonlObserver,
     NoopObserver,
     ObservabilityEvent,
     Observer,
@@ -11,6 +13,8 @@ from .tracing import (
 __all__ = [
     "EventLevel",
     "EventType",
+    "CompositeObserver",
+    "JsonlObserver",
     "NoopObserver",
     "ObservabilityEvent",
     "Observer",
