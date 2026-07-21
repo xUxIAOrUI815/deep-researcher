@@ -121,7 +121,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 00 | `codex/bg001-00-foundation-contracts-baseline` | integrated | e406407 | Contracts, Frozen Replay, baseline, ADRs, and order-independent tests complete. |
 | 01 | `codex/bg001-01-event-trace-store` | integrated | 7a90c9a | Append-only SQLite event store, instrumentation, redaction, and durable OTLP outbox complete. |
 | 02 | `codex/bg001-02-artifact-knowledge-storage` | integrated | 58de1c2 | Immutable content-addressed artifacts, revisioned evidence repositories, ingestion/retrieval/projection split, and durable pipeline dual-write complete. |
-| 03 | `codex/bg001-03-studio-v1` | pending | | |
+| 03 | `codex/bg001-03-studio-v1` | integrated | 56224fe | Persistent event-derived Thread/Run/Span projections, searchable/paginated SSE timeline, trace export, masking, and Console trace migration complete. |
 | 04 | `codex/bg001-04-agent-kernel` | pending | | |
 | 05 | `codex/bg001-05-protocol-tool-gateway` | pending | | |
 | 06 | `codex/bg001-06-orchestration-runtime` | pending | | |
@@ -682,4 +682,38 @@ Remaining risks: Console still reads the draft MemoryObserver/session projection
   until branch 03 installs persistent Studio projections. The graph dual-write
   setter and legacy session manager remain transitional and are removed when
   branch 15 switches every entry point to the new runtime.
+```
+
+### Branch 03 execution record
+
+```text
+Branch: codex/bg001-03-studio-v1
+Started from integration commit: be3ddc8
+Scope delivered: Independent persistent Thread -> Run -> Span -> Timeline
+  projection schema with migrations, sequence/idempotency validation, cumulative
+  model/tool usage, artifacts, versions, latency, attempts, retry, permission,
+  error and terminal-state fields; event-outbox projection delivery and catch-up;
+  deterministic rebuild; thread/run/span catalogs; filtered full-text timeline
+  queries with stable cursors; SSE transport; complete JSON/NDJSON trace export;
+  server-side defense-in-depth masking; Console replacement of MemoryObserver
+  and state-event fallback plus searchable/paginated detailed trace UI.
+Boundary check: No task-DAG, evidence-graph, state-diff, replay, fork, A/B,
+  badcase, scheduler, AgentKernel, evaluation, evolution, or RL behavior was
+  added. Studio-specific service and HTTP tests pass when LangGraph-state reads
+  are forced to fail; source events remain immutable.
+Tests: 132 passed in normal order and 132 passed with test files in reverse
+  order; eight Studio/Console cases passed; JavaScript syntax validation passed;
+  Frozen Replay exactly matched the branch-00 baseline; integration rerun passed
+  all 132 tests.
+Failure/recovery tests: 2,052-event pagination and complete export, restart
+  persistence, projection deletion/rebuild equality, sequence-gap rejection,
+  checksum corruption, delivery failure/outbox retry, filter/search cursors,
+  span lifecycle details, run terminal status, source-event and projection
+  masking, SSE ordering, HTTP export, and observer restoration are covered.
+Integration merge commit: 56224fe
+Remote push: feature and integration commits verified successful to origin on
+  2026-07-22.
+Remaining risks: Existing non-Studio Console report/task/context panels still
+  use transitional draft graph/session data. Branches 06, 12, and 15 replace
+  those panels with task/evidence projections and complete entry-point migration.
 ```
