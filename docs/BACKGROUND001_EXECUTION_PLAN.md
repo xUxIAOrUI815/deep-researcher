@@ -640,7 +640,7 @@ Failure/recovery tests: Same-process and cross-connection concurrent appends,
   pagination, backup/restore, redaction, graph failure, retry callback, OTLP
   transport failure, durable outbox restart/retry, and real model usage paths.
 Integration merge commit: 7a90c9a
-Remote push: pending
+Remote push: verified successful to origin/codex/bg001-integration on 2026-07-22
 Remaining risks: Console continues to use its draft MemoryObserver until Studio
   V1 branch 03 replaces it with event projections. Artifact bodies and replay
   remain deliberately absent per this branch boundary.
