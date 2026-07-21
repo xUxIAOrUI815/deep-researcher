@@ -119,7 +119,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | # | Branch | Status | Integration commit | Notes |
 | --- | --- | --- | --- | --- |
 | 00 | `codex/bg001-00-foundation-contracts-baseline` | integrated | e406407 | Contracts, Frozen Replay, baseline, ADRs, and order-independent tests complete. |
-| 01 | `codex/bg001-01-event-trace-store` | implemented; merge pending | pending | Append-only SQLite event store, instrumentation, redaction, and durable OTLP outbox complete. |
+| 01 | `codex/bg001-01-event-trace-store` | integrated | 7a90c9a | Append-only SQLite event store, instrumentation, redaction, and durable OTLP outbox complete. |
 | 02 | `codex/bg001-02-artifact-knowledge-storage` | pending | | |
 | 03 | `codex/bg001-03-studio-v1` | pending | | |
 | 04 | `codex/bg001-04-agent-kernel` | pending | | |
@@ -639,7 +639,7 @@ Failure/recovery tests: Same-process and cross-connection concurrent appends,
   orphan/open-child spans, sequence conflicts, duplicate terminal, long-run
   pagination, backup/restore, redaction, graph failure, retry callback, OTLP
   transport failure, durable outbox restart/retry, and real model usage paths.
-Integration merge commit: pending
+Integration merge commit: 7a90c9a
 Remote push: pending
 Remaining risks: Console continues to use its draft MemoryObserver until Studio
   V1 branch 03 replaces it with event projections. Artifact bodies and replay
