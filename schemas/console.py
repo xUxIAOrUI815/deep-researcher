@@ -41,6 +41,23 @@ class TimelineEventSummary(BaseModel):
     task_id: Optional[str] = None
     section_id: Optional[str] = None
     payload: Dict[str, Any] = Field(default_factory=dict)
+    sequence_no: int = 0
+    run_id: str = ""
+    trace_id: str = ""
+    span_id: str = ""
+    parent_span_id: Optional[str] = None
+    span_kind: str = ""
+    actor_id: str = ""
+    status: str = ""
+    input_artifact_ids: List[str] = Field(default_factory=list)
+    output_artifact_ids: List[str] = Field(default_factory=list)
+    state_artifact_id: Optional[str] = None
+    usage: Dict[str, Any] = Field(default_factory=dict)
+    latency_ms: float = 0.0
+    attempt: int = 1
+    error: Optional[Dict[str, Any]] = None
+    component_versions: Dict[str, Any] = Field(default_factory=dict)
+    permissions: Dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"strict": True}
 

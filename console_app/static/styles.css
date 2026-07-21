@@ -298,6 +298,28 @@ select {
   gap: 12px;
 }
 
+.timeline-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.timeline-toolbar input {
+  min-width: 180px;
+  flex: 1;
+}
+
+.trace-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.error-text {
+  color: #b42318;
+}
+
 .timeline-item {
   border: 1px solid var(--line);
   border-radius: 16px;
