@@ -11,6 +11,10 @@ const state = {
   debugOpen: false,
   selectedTaskId: null,
   selectedSourceTab: "sources",
+  tracePage: null,
+  traceNext: null,
+  traceSearch: "",
+  traceTypes: "",
   pollTimer: null,
 };
 
@@ -122,6 +126,18 @@ async function loadReport() {
     state.loading = false;
     render();
   }
+}
+
+async function loadTracePage(afterSequence = 0) {
+  const runId = state.console?.timeline?.[0]?.run_id || state.debug?.state_summary?.run_id;
+  if (!runId) return;
+  const params = new URLSearchParams({ after_sequence: String(afterSequence), limit: "100" });
+  if (state.traceSearch) params.set("text", state.traceSearch);
+  if (state.traceTypes) params.set("event_types", state.traceTypes);
+  const page = await api(`/api/studio/runs/${runId}/timeline?${params}`);
+  state.tracePage = page.items;
+  state.traceNext = page.next_after_sequence;
+  render();
 }
 
 function firstTaskId(taskTree) {
@@ -321,19 +337,30 @@ function consoleView() {
           </div>
           <div class="card">
             <h2>时间线</h2>
-            ${data.timeline.length ? `
+            <div class="timeline-toolbar">
+              <input id="trace-search" value="${escapeHtml(state.traceSearch)}" placeholder="Search trace" />
+              <input id="trace-types" value="${escapeHtml(state.traceTypes)}" placeholder="event types (comma separated)" />
+              <button class="secondary-btn" data-action="trace-filter">Filter</button>
+              ${data.timeline?.[0]?.run_id ? `<a class="secondary-btn" href="/api/studio/runs/${data.timeline[0].run_id}/export?format=json">Export JSON</a>` : ""}
+            </div>
+            ${(state.tracePage || data.timeline).length ? `
               <div class="timeline-list">
-                ${data.timeline.map(item => `
+                ${(state.tracePage || data.timeline).map(item => `
                   <div class="timeline-item">
                     <div class="timeline-top">
                       <span class="badge">${escapeHtml(item.event_type)}</span>
-                      <time>${escapeHtml(item.timestamp)}</time>
+                      <time>${escapeHtml(item.timestamp || item.occurred_at)}</time>
                     </div>
-                    <p>${escapeHtml(item.message || item.event_type)}</p>
+                    <p>${escapeHtml(item.message || item.payload?.message || item.event_type)}</p>
+                    <p class="trace-meta">#${escapeHtml(item.sequence_no)} · ${escapeHtml(item.actor_id)} · ${escapeHtml(item.span_kind)} · ${escapeHtml(item.status)} · ${escapeHtml(item.latency_ms || 0)}ms · retry ${escapeHtml(item.attempt || 1)}</p>
+                    <p class="trace-meta">tokens ${escapeHtml((item.usage || {}).input_tokens || 0)}/${escapeHtml((item.usage || {}).output_tokens || 0)} · cost $${escapeHtml((item.usage || {}).cost_usd || 0)} · artifacts ${escapeHtml([...(item.input_artifact_ids || []), ...(item.output_artifact_ids || [])].length)}</p>
+                    ${item.error ? `<p class="error-text">${escapeHtml(item.error.message || item.error.code || "error")}</p>` : ""}
+                    <details><summary>Versions / artifacts / permissions</summary><pre>${escapeHtml(JSON.stringify({components: item.component_versions, input_artifacts: item.input_artifact_ids, output_artifacts: item.output_artifact_ids, permissions: item.permissions}, null, 2))}</pre></details>
                     ${Object.keys(item.payload || {}).length ? `<details><summary>详情</summary><pre>${escapeHtml(JSON.stringify(item.payload, null, 2))}</pre></details>` : ""}
                   </div>
                 `).join("")}
               </div>
+              ${state.traceNext ? `<button class="secondary-btn" data-action="trace-next" data-after="${state.traceNext}">Next page</button>` : ""}
             ` : `<p class="muted">暂无事件时间线；在 trace 数据出现前，控制台会根据状态推断进度。</p>`}
           </div>
         </section>
@@ -632,6 +659,30 @@ function bindEvents() {
       render();
     };
   });
+  const traceFilter = document.querySelector("[data-action='trace-filter']");
+  if (traceFilter) {
+    traceFilter.onclick = async () => {
+      state.traceSearch = document.getElementById("trace-search")?.value || "";
+      state.traceTypes = document.getElementById("trace-types")?.value || "";
+      try {
+        await loadTracePage(0);
+      } catch (error) {
+        state.error = String(error.message || error);
+        render();
+      }
+    };
+  }
+  const traceNext = document.querySelector("[data-action='trace-next']");
+  if (traceNext) {
+    traceNext.onclick = async () => {
+      try {
+        await loadTracePage(Number(traceNext.dataset.after || 0));
+      } catch (error) {
+        state.error = String(error.message || error);
+        render();
+      }
+    };
+  }
 }
 
 bootstrap();

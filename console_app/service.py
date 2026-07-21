@@ -9,10 +9,18 @@ from typing import Any, Dict, List, Optional
 
 import core.graph as graph_module
 from core.context_builders import PlannerContextBuilder, ResearcherContextBuilder, WriterContextBuilder
-from core.observability import EventLevel, EventType, NoopObserver, ObservabilityEvent, set_observer
+from core.observability import get_observer, set_observer
 from core.run_context import RunContext
 from core.session_knowledge import KnowledgeManager
 from core.session_retrieval import SessionRetrievalService
+from deep_researcher.events import EventRecorder, PersistentEventObserver, SQLiteEventStore
+from deep_researcher.studio import (
+    SQLiteStudioProjectionStore,
+    StudioProjectionExporter,
+    StudioProjector,
+    TimelineQuery,
+    normalize_projection_id,
+)
 from schemas.console import (
     ActiveAgentSummary,
     ConsoleRunSummary,
@@ -27,21 +35,6 @@ from schemas.console import (
 from schemas.state import DistillerOutputs, KnowledgeRefs, PlannerState, ResearcherOutputs, RunMetadata
 
 
-class MemoryObserver(NoopObserver):
-    def __init__(self) -> None:
-        self._events: dict[str, list[ObservabilityEvent]] = {}
-        self._lock = asyncio.Lock()
-
-    def emit(self, event: ObservabilityEvent) -> None:
-        events = self._events.setdefault(event.research_id, [])
-        events.append(event)
-        if len(events) > 500:
-            del events[:-500]
-
-    def list_events(self, research_id: str) -> list[dict[str, Any]]:
-        return [item.to_dict() for item in self._events.get(research_id, [])]
-
-
 @dataclass
 class RunHandle:
     research_id: str
@@ -54,6 +47,7 @@ class RunHandle:
     status: str = "initializing"
     error: str = ""
     resumed: bool = False
+    run_id: str = ""
 
 
 class ResearchConsoleService:
@@ -74,8 +68,20 @@ class ResearchConsoleService:
         self.active_runs: dict[str, RunHandle] = {}
         self._run_tasks: set[asyncio.Task[Any]] = set()
         self._closed = False
-        self.observer = MemoryObserver()
+        self.event_store = SQLiteEventStore(self.runtime_dir / "events.sqlite3")
+        self.studio_store = SQLiteStudioProjectionStore(self.runtime_dir / "studio_projection.sqlite3")
+        self.studio_projector = StudioProjector(self.event_store, self.studio_store)
+        self.event_recorder = EventRecorder(
+            self.event_store, (StudioProjectionExporter(self.studio_store),)
+        )
+        self.observer = PersistentEventObserver(self.event_recorder)
+        self._previous_observer = get_observer()
         set_observer(self.observer)
+        self.studio_projector.sync_all()
+        while self.event_store.pending_exports(exporter_name="studio_projection", limit=1000):
+            outcomes = self.event_recorder.retry_pending(exporter_name="studio_projection", limit=1000)
+            if not any(outcome.exported_to for outcome in outcomes):
+                break
         graph_module.SESSION_KNOWLEDGE_MANAGER = self.knowledge_manager
         graph_module.SESSION_RETRIEVAL_SERVICE = self.retrieval_service
         graph_module.PLANNER_CONTEXT_BUILDER = self.planner_context_builder
@@ -128,10 +134,15 @@ class ResearchConsoleService:
             await asyncio.gather(*pending, return_exceptions=True)
         self._run_tasks.clear()
         self.knowledge_manager.close()
+        if get_observer() is self.observer:
+            set_observer(self._previous_observer)
+        self.studio_store.close()
+        self.event_store.close()
 
     async def _execute_run(self, handle: RunHandle) -> None:
         config = {"configurable": {"thread_id": handle.thread_id, "research_id": handle.research_id}}
         context = RunContext.from_config(config, root_query=handle.query)
+        handle.run_id = context.run_id
         initial_state = self._build_initial_state(context, handle.query, handle.instructions, handle.depth)
         saver = await graph_module.init_sqlite_saver(str(self.graph_db_path))
         graph = graph_module.create_research_graph(saver)
@@ -152,6 +163,7 @@ class ResearchConsoleService:
             )
         finally:
             await saver.conn.close()
+            self.studio_projector.sync_run(handle.run_id)
 
     def _build_initial_state(
         self,
@@ -224,6 +236,67 @@ class ResearchConsoleService:
     def _get_handle(self, research_id: str) -> Optional[RunHandle]:
         return self.active_runs.get(research_id)
 
+    def _resolve_run_id(self, research_id: str) -> str | None:
+        handle = self._get_handle(research_id)
+        if handle and handle.run_id:
+            return handle.run_id
+        thread_id = normalize_projection_id("thread", research_id)
+        page = self.studio_store.list_runs(thread_id=thread_id, limit=1000)
+        return str(page.items[-1]["run_id"]) if page.items else None
+
+    def _projected_run(self, research_id: str) -> dict[str, Any] | None:
+        run_id = self._resolve_run_id(research_id)
+        if not run_id:
+            return None
+        self.studio_projector.sync_run(run_id)
+        return self.studio_store.get_run(run_id)
+
+    def list_studio_threads(
+        self, *, after_created_at: str | None = None, after_thread_id: str | None = None, limit: int = 100
+    ) -> dict[str, Any]:
+        self.studio_projector.sync_all()
+        page = self.studio_store.list_threads(
+            after_created_at=after_created_at, after_thread_id=after_thread_id, limit=limit
+        )
+        return {"items": list(page.items), "next_cursor": page.next_cursor}
+
+    def list_studio_runs(
+        self, *, thread_id: str | None = None, after_started_at: str | None = None,
+        after_run_id: str | None = None, limit: int = 100,
+    ) -> dict[str, Any]:
+        self.studio_projector.sync_all()
+        page = self.studio_store.list_runs(
+            thread_id=thread_id, after_started_at=after_started_at,
+            after_run_id=after_run_id, limit=limit,
+        )
+        return {"items": list(page.items), "next_cursor": page.next_cursor}
+
+    def get_studio_run(self, run_id: str) -> dict[str, Any]:
+        self.studio_projector.sync_run(run_id)
+        run = self.studio_store.get_run(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        return run
+
+    def list_studio_spans(self, run_id: str, *, after_started_sequence: int = 0, limit: int = 100) -> dict[str, Any]:
+        self.studio_projector.sync_run(run_id)
+        if self.studio_store.get_run(run_id) is None:
+            raise KeyError(run_id)
+        page = self.studio_store.list_spans(
+            run_id, after_started_sequence=after_started_sequence, limit=limit
+        )
+        return {"items": list(page.items), "next_cursor": page.next_cursor}
+
+    def get_timeline_page(self, query: TimelineQuery) -> dict[str, Any]:
+        self.studio_projector.sync_run(query.run_id)
+        if self.studio_store.get_run(query.run_id) is None:
+            raise KeyError(query.run_id)
+        page = self.studio_store.timeline(query)
+        return {"items": list(page.items), "next_after_sequence": page.next_after_sequence}
+
+    def export_studio_trace(self, run_id: str) -> dict[str, Any]:
+        return self.studio_projector.export_trace(run_id)
+
     async def list_runs(self) -> List[Dict[str, Any]]:
         rows = self.knowledge_manager.store.conn.execute(
             "SELECT research_id, session_id, root_query, status, updated_at, current_round FROM research_sessions ORDER BY updated_at DESC LIMIT 20"
@@ -231,12 +304,22 @@ class ResearchConsoleService:
         output = []
         for row in rows:
             handle = self._get_handle(str(row["research_id"]))
+            projected = self._projected_run(str(row["research_id"]))
+            projected_status = {
+                "succeeded": "completed",
+                "failed": "failed",
+                "cancelled": "cancelled",
+                "running": "running",
+                "queued": "initializing",
+                "waiting": "waiting",
+            }.get(str((projected or {}).get("status", "")), "")
             output.append(
                 {
                     "research_id": str(row["research_id"]),
                     "session_id": str(row["session_id"]),
                     "query": str(row["root_query"]),
-                    "status": handle.status if handle else str(row["status"]),
+                    "status": (handle.status if handle else projected_status or str(row["status"])),
+                    "run_id": (projected or {}).get("run_id", ""),
                     "current_round": int(row["current_round"]),
                     "updated_at": str(row["updated_at"]),
                     "console_url": f"/console/{row['research_id']}",
@@ -274,8 +357,10 @@ class ResearchConsoleService:
             fallback_section_packs=state.get("section_evidence_packs", []),
         ).model_dump()
         handle = self._get_handle(research_id)
-        status = self._derive_status(state, handle)
-        current_stage = self._derive_stage(state, handle, self.observer.list_events(research_id))
+        projected_run = self._projected_run(research_id)
+        timeline = self._build_timeline(research_id)
+        status = self._derive_status(state, handle, projected_run)
+        current_stage = self._derive_stage(state, handle, [item.model_dump() for item in timeline])
         elapsed_seconds = max(
             0.0,
             (datetime.now() - (handle.started_at if handle else session.created_at)).total_seconds(),
@@ -296,7 +381,7 @@ class ResearchConsoleService:
             planner_state=state.get("planner_state", {}),
             report_outline=state.get("report_outline", {}),
             task_tree=state.get("task_tree", {}),
-            timeline=self._build_timeline(research_id, state),
+            timeline=timeline,
             knowledge_summary=self._build_knowledge_summary(snapshot),
             latest_coverage_snapshot=snapshot.get("latest_coverage_snapshot"),
             open_gaps=snapshot.get("open_gaps", []),
@@ -334,27 +419,32 @@ class ResearchConsoleService:
 
     async def get_debug_view(self, research_id: str) -> DebugViewResponse:
         summary = await self.get_console_summary(research_id)
-        state = await self._load_graph_state(research_id, summary.thread_id)
         snapshot = self.knowledge_manager.get_session_snapshot(research_id, summary.session_id)
+        run_id = self._resolve_run_id(research_id)
+        run = self.studio_store.get_run(run_id) if run_id else None
+        spans = self.list_studio_spans(run_id, limit=1000)["items"] if run_id else []
+        planner_action = None
+        for event in reversed(summary.timeline):
+            if event.payload.get("action"):
+                planner_action = event.payload["action"]
+                break
         return DebugViewResponse(
             research_id=research_id,
             session_id=summary.session_id,
             status=summary.status,
             state_summary={
-                "active_task_id": state.get("active_task_id"),
-                "root_task_id": state.get("root_task_id"),
-                "planner_action": (state.get("planner_state", {}) or {}).get("action"),
-                "next_task_id": (state.get("planner_state", {}) or {}).get("next_task_id"),
-                "completed_tasks": len(state.get("completed_tasks", [])),
-                "failed_tasks": len(state.get("failed_tasks", [])),
+                "run_id": run_id,
+                "planner_action": planner_action,
+                "event_count": (run or {}).get("event_count", 0),
+                "span_count": len(spans),
+                "terminal_event_id": (run or {}).get("terminal_event_id"),
             },
             context_summary=summary.context_summary,
             trace=summary.timeline,
             raw_state={
-                "run_metadata": state.get("run_metadata", {}),
-                "planner_state": state.get("planner_state", {}),
-                "researcher_outputs": state.get("researcher_outputs", {}),
-                "distiller_outputs": state.get("distiller_outputs", {}),
+                "projection_schema": "StudioProjection@1",
+                "run": run or {},
+                "spans": spans,
             },
             snapshot_summary={
                 "session": snapshot.get("session", {}),
@@ -375,44 +465,53 @@ class ResearchConsoleService:
             section_pack_count=len(snapshot.get("section_evidence_packs", [])),
         )
 
-    def _build_timeline(self, research_id: str, state: Dict[str, Any]) -> List[TimelineEventSummary]:
+    def _build_timeline(self, research_id: str) -> List[TimelineEventSummary]:
+        projected = self._projected_run(research_id)
+        if not projected:
+            return []
+        after = max(0, int(projected["event_count"]) - 200)
+        page = self.studio_store.timeline(TimelineQuery(projected["run_id"], after_sequence=after, limit=200))
         events = []
-        for item in self.observer.list_events(research_id):
-            events.append(
-                TimelineEventSummary(
-                    event_id=str(item.get("event_id", "")),
-                    event_type=str(item.get("event_type", "")),
-                    timestamp=str(item.get("timestamp", "")),
-                    level=str(item.get("level", "info")),
-                    message=str(item.get("message", "")),
-                    node_name=item.get("node_name"),
-                    agent_name=item.get("agent_name"),
-                    task_id=item.get("task_id"),
-                    section_id=item.get("section_id"),
-                    payload=dict(item.get("payload", {}) or {}),
-                )
-            )
-        if not events:
-            for item in state.get("state_events", [])[-50:]:
-                events.append(
-                    TimelineEventSummary(
-                        event_type=str(item.get("event_type", "")),
-                        timestamp=str(item.get("timestamp", "")),
-                        message=str(item.get("message", "")),
-                        payload=dict(item.get("payload", {}) or {}),
-                    )
-                )
-        return events[-50:]
+        for item in page.items:
+            payload = dict(item.get("payload", {}) or {})
+            permissions = {
+                key: payload[key]
+                for key in ("permission", "permissions", "approval", "risk_level", "policy_decision")
+                if key in payload
+            }
+            events.append(TimelineEventSummary(
+                event_id=str(item.get("event_id", "")), event_type=str(item.get("event_type", "")),
+                timestamp=str(item.get("occurred_at", "")), level=str(item.get("level", "info")),
+                message=str(payload.get("message", "")), node_name=payload.get("node_name"),
+                agent_name=str(item.get("actor_id", "")), task_id=item.get("task_id"),
+                section_id=payload.get("section_id"), payload=payload,
+                sequence_no=int(item.get("sequence_no", 0)), run_id=str(item.get("run_id", "")),
+                trace_id=str(item.get("trace_id", "")), span_id=str(item.get("span_id", "")),
+                parent_span_id=item.get("parent_span_id"), span_kind=str(item.get("span_kind", "")),
+                actor_id=str(item.get("actor_id", "")), status=str(item.get("status", "")),
+                input_artifact_ids=list(item.get("input_artifact_ids", []) or []),
+                output_artifact_ids=list(item.get("output_artifact_ids", []) or []),
+                state_artifact_id=item.get("state_artifact_id"), usage=dict(item.get("usage", {}) or {}),
+                latency_ms=float(item.get("latency_ms", 0.0)), attempt=int(item.get("attempt", 1)),
+                error=item.get("error"), component_versions=dict(item.get("component_versions", {}) or {}),
+                permissions=permissions,
+            ))
+        return events
 
-    def _derive_status(self, state: Dict[str, Any], handle: Optional[RunHandle]) -> str:
+    def _derive_status(self, state: Dict[str, Any], handle: Optional[RunHandle], projected_run: dict[str, Any] | None = None) -> str:
+        if handle and handle.status in {"initializing", "running", "failed", "cancelled", "completed"}:
+            return handle.status
+        if projected_run:
+            projected_status = {
+                "succeeded": "completed", "failed": "failed", "cancelled": "cancelled",
+                "running": "running", "queued": "initializing", "waiting": "waiting",
+            }.get(str(projected_run.get("status")))
+            if projected_status:
+                return projected_status
         if state.get("final_report"):
             return "completed"
-        if handle and handle.status == "failed":
-            return "failed"
         if state.get("error_state"):
             return "failed"
-        if handle:
-            return handle.status
         return "idle"
 
     def _derive_stage(self, state: Dict[str, Any], handle: Optional[RunHandle], observer_events: List[Dict[str, Any]]) -> str:
@@ -424,13 +523,17 @@ class ResearchConsoleService:
             return "failed"
         if observer_events:
             latest = observer_events[-1].get("event_type", "")
-            if "writer" in latest or latest == EventType.REPORT_FINALIZED.value:
+            if latest == "run_completed":
+                return "completed"
+            if latest == "run_failed":
+                return "failed"
+            if latest == "report_changed":
                 return "writing"
-            if "distill" in latest or "evidence_pack" in latest:
+            if latest in {"evidence_changed", "verification_completed"}:
                 return "knowledge_updating"
-            if "source" in latest or "query" in latest or "exploration" in latest:
+            if latest in {"tool_started", "tool_completed", "model_started", "model_completed", "decision_recorded"}:
                 return "researching"
-            if "task" in latest or "planner" in latest:
+            if latest in {"task_created", "task_state_changed", "span_started", "span_completed"}:
                 return "planning"
         planner_action = (state.get("planner_state", {}) or {}).get("action")
         if planner_action == "start_writing":
