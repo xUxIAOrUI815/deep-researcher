@@ -51,6 +51,14 @@ class EventType(str, Enum):
     WRITER_STARTED = "writer.started"
     SECTION_GENERATED = "section.generated"
     WRITER_COMPLETED = "writer.completed"
+    MODEL_STARTED = "model.started"
+    MODEL_COMPLETED = "model.completed"
+    MODEL_FAILED = "model.failed"
+    TOOL_STARTED = "tool.started"
+    TOOL_COMPLETED = "tool.completed"
+    TOOL_FAILED = "tool.failed"
+    RETRY_SCHEDULED = "retry.scheduled"
+    BUDGET_SNAPSHOT = "budget.snapshot"
 
 
 @dataclass

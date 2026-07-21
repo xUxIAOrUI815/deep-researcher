@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import math
 import os
 import re
+import time
+import uuid
 from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
@@ -93,7 +96,13 @@ def _heuristic_relevance_score(query: str, root_user_query: str) -> int:
     return max(1, min(10, score))
 
 
-async def _score_query_relevance(query: str, root_user_query: str) -> tuple[int, str]:
+async def _score_query_relevance(
+    query: str,
+    root_user_query: str,
+    *,
+    run_context: Any = None,
+    task_id: Optional[str] = None,
+) -> tuple[int, str]:
     """为候选查询打分；启用 LLM 时走模型评分，否则回退到启发式规则。"""
     prompt = f"""Score the relevance between the candidate retrieval query and the root research question.
 
@@ -111,6 +120,15 @@ Return only one integer from 1 to 10:
     use_llm = os.getenv("RESEARCHER_USE_LLM_SCORING", "").lower() in {"1", "true", "yes"}
     api_key = os.getenv("DEEPSEEK_API_KEY", "")
     if use_llm and api_key:
+        operation_id = f"operation_{uuid.uuid4().hex}"
+        started = time.perf_counter()
+        _emit_task_event(
+            run_context,
+            EventType.MODEL_STARTED,
+            task_id,
+            "Researcher started model relevance scoring.",
+            {"operation_id": operation_id, "model": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"), "purpose": "query_relevance"},
+        )
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.post(
@@ -127,12 +145,43 @@ Return only one integer from 1 to 10:
                     },
                 )
                 response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                response_payload = response.json()
+                content = response_payload["choices"][0]["message"]["content"]
+                usage = response_payload.get("usage", {}) or {}
+                _emit_task_event(
+                    run_context,
+                    EventType.MODEL_COMPLETED,
+                    task_id,
+                    "Researcher completed model relevance scoring.",
+                    {
+                        "operation_id": operation_id,
+                        "model": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+                        "latency_ms": (time.perf_counter() - started) * 1000.0,
+                        "usage": {
+                            "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                            "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+                            "model_calls": 1,
+                        },
+                    },
+                )
                 match = re.search(r"\d+", content)
                 if match:
                     return max(1, min(10, int(match.group(0)))), "llm"
-        except Exception:
-            pass
+        except Exception as exc:
+            _emit_task_event(
+                run_context,
+                EventType.MODEL_FAILED,
+                task_id,
+                "Researcher model relevance scoring failed; using deterministic fallback.",
+                {
+                    "operation_id": operation_id,
+                    "error": _format_exception(exc),
+                    "retryable": isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)),
+                    "fatal": False,
+                    "latency_ms": (time.perf_counter() - started) * 1000.0,
+                    "usage": {"model_calls": 1, "errors": 1},
+                },
+            )
     return _heuristic_relevance_score(query, root_user_query), "heuristic"
 
 
@@ -388,7 +437,12 @@ async def run_researcher(
             "Researcher generated candidate query.",
             {"query": query},
         )
-        score, scoring_method = await _score_query_relevance(query, root_query)
+        score, scoring_method = await _score_query_relevance(
+            query,
+            root_query,
+            run_context=run_context,
+            task_id=task_id,
+        )
         metadata["scoring_methods"].append(scoring_method)
         if score < MIN_RELEVANCE_SCORE:
             rejection = {"query": query, "score": score, "reason": "low_relevance"}
@@ -481,32 +535,101 @@ async def run_researcher(
         before_sources = len(accepted_sources)
         before_passages = len(passages)
 
-        if effective_search_mode == "mock":
-            search_results = _mock_search(query, max_results=max_sources_per_query)
-        else:
-            try:
-                search_results = await gateway.search(query, max_results=max_sources_per_query, provider="tavily")
-            except Exception as exc:
-                recoverable = _is_recoverable_search_error(exc)
-                search_error = {
-                    "query": query,
+        search_operation_id = f"operation_{uuid.uuid4().hex}"
+        search_started = time.perf_counter()
+        _emit_task_event(
+            run_context,
+            EventType.TOOL_STARTED,
+            task_id,
+            "Researcher started search tool call.",
+            {
+                "operation_id": search_operation_id,
+                "tool_name": "mock_search" if effective_search_mode == "mock" else "tavily_search",
+                "query": query,
+                "max_results": max_sources_per_query,
+            },
+        )
+        try:
+            if effective_search_mode == "mock":
+                search_results = _mock_search(query, max_results=max_sources_per_query)
+            else:
+                def _record_retry(retry: dict[str, Any]) -> None:
+                    _emit_task_event(
+                        run_context,
+                        EventType.RETRY_SCHEDULED,
+                        task_id,
+                        "Researcher scheduled a search provider retry.",
+                        {
+                            "operation_id": search_operation_id,
+                            "tool_name": "tavily_search",
+                            "query": query,
+                            **retry,
+                            "usage": {"retries": 1},
+                        },
+                    )
+
+                search_kwargs: dict[str, Any] = {
+                    "max_results": max_sources_per_query,
                     "provider": "tavily",
-                    "error": _format_exception(exc),
-                    "recoverable": recoverable,
-                    "attempts": getattr(exc, "attempts", None),
-                    "status_code": getattr(exc, "status_code", None),
                 }
-                metadata["search_errors"].append(search_error)
-                _emit_task_event(
-                    run_context,
-                    EventType.QUERY_REJECTED,
-                    task_id,
-                    "Researcher skipped query after recoverable search provider error." if recoverable else "Researcher hit fatal search provider error.",
-                    search_error,
-                )
-                if recoverable:
-                    continue
-                raise
+                if "on_retry" in inspect.signature(gateway.search).parameters:
+                    search_kwargs["on_retry"] = _record_retry
+                search_results = await gateway.search(query, **search_kwargs)
+        except Exception as exc:
+            recoverable = _is_recoverable_search_error(exc)
+            search_error = {
+                "query": query,
+                "provider": "tavily",
+                "error": _format_exception(exc),
+                "recoverable": recoverable,
+                "retryable": recoverable,
+                "fatal": not recoverable,
+                "attempts": getattr(exc, "attempts", None),
+                "status_code": getattr(exc, "status_code", None),
+            }
+            _emit_task_event(
+                run_context,
+                EventType.TOOL_FAILED,
+                task_id,
+                "Researcher search tool call failed.",
+                {
+                    "operation_id": search_operation_id,
+                    "tool_name": "tavily_search",
+                    "latency_ms": (time.perf_counter() - search_started) * 1000.0,
+                    "usage": {
+                        "tool_calls": 1,
+                        "search_calls": 1,
+                        "retries": max(0, int(getattr(exc, "attempts", 1) or 1) - 1),
+                        "errors": 1,
+                    },
+                    **search_error,
+                },
+            )
+            metadata["search_errors"].append(search_error)
+            _emit_task_event(
+                run_context,
+                EventType.QUERY_REJECTED,
+                task_id,
+                "Researcher skipped query after recoverable search provider error." if recoverable else "Researcher hit fatal search provider error.",
+                search_error,
+            )
+            if recoverable:
+                continue
+            raise
+        else:
+            _emit_task_event(
+                run_context,
+                EventType.TOOL_COMPLETED,
+                task_id,
+                "Researcher completed search tool call.",
+                {
+                    "operation_id": search_operation_id,
+                    "tool_name": "mock_search" if effective_search_mode == "mock" else "tavily_search",
+                    "result_count": len(search_results),
+                    "latency_ms": (time.perf_counter() - search_started) * 1000.0,
+                    "usage": {"tool_calls": 1, "search_calls": 1},
+                },
+            )
         search_results_cache.extend(search_results)
 
         candidate_sources: list[dict[str, Any]] = []
@@ -528,6 +651,19 @@ async def run_researcher(
 
         scraped_by_url: dict[str, ScrapedData] = {}
         if enable_scraping and candidate_sources:
+            scrape_operation_id = f"operation_{uuid.uuid4().hex}"
+            scrape_started = time.perf_counter()
+            _emit_task_event(
+                run_context,
+                EventType.TOOL_STARTED,
+                task_id,
+                "Researcher started scraper tool call.",
+                {
+                    "operation_id": scrape_operation_id,
+                    "tool_name": f"scraper:{getattr(scraper, 'mode', effective_scraper_mode)}",
+                    "url_count": len(candidate_sources),
+                },
+            )
             try:
                 source_context = {source["url"]: dict(source) for source in candidate_sources}
                 scraped_batch = await scraper.scrape_batch(
@@ -539,6 +675,35 @@ async def run_researcher(
                     scraped_by_url[scraped.url] = scraped
             except Exception as exc:
                 metadata["scrape_error"] = str(exc)
+                _emit_task_event(
+                    run_context,
+                    EventType.TOOL_FAILED,
+                    task_id,
+                    "Researcher scraper tool call failed.",
+                    {
+                        "operation_id": scrape_operation_id,
+                        "tool_name": f"scraper:{getattr(scraper, 'mode', effective_scraper_mode)}",
+                        "error": _format_exception(exc),
+                        "retryable": False,
+                        "fatal": False,
+                        "latency_ms": (time.perf_counter() - scrape_started) * 1000.0,
+                        "usage": {"tool_calls": 1, "errors": 1},
+                    },
+                )
+            else:
+                _emit_task_event(
+                    run_context,
+                    EventType.TOOL_COMPLETED,
+                    task_id,
+                    "Researcher completed scraper tool call.",
+                    {
+                        "operation_id": scrape_operation_id,
+                        "tool_name": f"scraper:{getattr(scraper, 'mode', effective_scraper_mode)}",
+                        "result_count": len(scraped_batch),
+                        "latency_ms": (time.perf_counter() - scrape_started) * 1000.0,
+                        "usage": {"tool_calls": 1},
+                    },
+                )
 
         for source in candidate_sources:
             url = source["url"]

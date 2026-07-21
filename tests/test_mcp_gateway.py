@@ -69,6 +69,7 @@ async def test_tavily_search_uses_bearer_header(monkeypatch):
 @pytest.mark.asyncio
 async def test_tavily_retries_retryable_timeout(monkeypatch):
     calls: list[int] = []
+    retries: list[dict] = []
 
     class FakeResponse:
         def raise_for_status(self) -> None:
@@ -110,12 +111,13 @@ async def test_tavily_retries_retryable_timeout(monkeypatch):
 
     result = await TavilySearchProvider(api_key="tvly-test-key").execute(
         "tavily_search",
-        {"query": "transformer", "max_results": 3},
+        {"query": "transformer", "max_results": 3, "_on_retry": retries.append},
     )
 
     assert result.success is True
     assert result.attempts == 2
     assert len(calls) == 2
+    assert retries == [{"attempt": 2, "error_type": "ReadTimeout"}]
     assert result.data[0].url == "https://example.org/retry-success"
 
 

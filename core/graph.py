@@ -62,6 +62,30 @@ def _now_iso() -> str:
     return datetime.now().isoformat()
 
 
+def _record_budget_snapshot(state: GraphState, context: RunContext, stage: str) -> None:
+    usage = dict(state.get("token_usage", {}) or {})
+    get_observer().record_run_event(
+        context,
+        EventType.BUDGET_SNAPSHOT,
+        message=f"Budget usage snapshot after {stage}.",
+        payload={
+            "stage": stage,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": int(usage.get("total_tokens", 0) or 0),
+                "cost_usd": float(usage.get("cost_usd", 0.0) or 0.0),
+                "wall_time_seconds": float(usage.get("wall_time_seconds", 0.0) or 0.0),
+                "model_calls": int(usage.get("model_calls", 0) or 0),
+                "tool_calls": int(usage.get("tool_calls", 0) or 0),
+                "search_calls": int(usage.get("search_calls", 0) or 0),
+                "retries": int(usage.get("retries", 0) or 0),
+                "errors": int(usage.get("errors", 0) or 0),
+            },
+            "legacy_token_usage": usage,
+        },
+    )
+
+
 def _get_config_dict(config: Optional[Any]) -> dict:
     """把 RunnableConfig 或兼容对象统一转换成普通 dict。"""
     if config is None:
@@ -456,12 +480,21 @@ async def planner(state: GraphState, config: Optional[RunnableConfig] = None) ->
         state["section_goals"] = planner_result.section_goals
     state["token_usage"]["planning_tokens"] += 0
 
+    _record_budget_snapshot(state, context, "planner")
+
     observer.record_node_event(
         context,
         EventType.NODE_COMPLETED,
         "planner",
         payload={"action": planner_state.action},
     )
+    if planner_state.action == PlannerAction.STOP.value:
+        observer.record_run_event(
+            context,
+            EventType.RUN_COMPLETED,
+            message="Research run stopped by planner semantic stop decision.",
+            payload={"stop_reason": planner_state.stop_reason or "planner_stop"},
+        )
     _append_state_event(
         state,
         "planner.decision",
@@ -501,6 +534,8 @@ async def researcher_async(state: GraphState, config: Optional[RunnableConfig] =
 
     outputs = await _call_researcher_agent(state, context)
     state["researcher_outputs"] = outputs.model_dump()
+
+    _record_budget_snapshot(state, context, "researcher")
 
     observer.record_node_event(
         context,
@@ -546,6 +581,8 @@ async def distiller_async(state: GraphState, config: Optional[RunnableConfig] = 
         _set_task_status(state, context, task_id, "completed", updated_by="distiller")
         state["active_task_id"] = None
 
+    _record_budget_snapshot(state, context, "distiller")
+
     observer.record_node_event(
         context,
         EventType.NODE_COMPLETED,
@@ -568,6 +605,8 @@ async def writer_async(state: GraphState, config: Optional[RunnableConfig] = Non
         status="completed",
         current_active_task_id=None,
     )
+
+    _record_budget_snapshot(state, context, "writer")
 
     observer.record_node_event(context, EventType.NODE_COMPLETED, "writer")
     observer.record_run_event(context, EventType.RUN_COMPLETED, message="Research run completed")
@@ -610,14 +649,50 @@ def should_continue(state: GraphState) -> str:
     return "researcher"
 
 
+def _with_failure_events(node_name: str, node: Any) -> Any:
+    async def observed(state: GraphState, config: Optional[RunnableConfig] = None) -> GraphState:
+        try:
+            return await node(state, config)
+        except Exception as exc:
+            context = _ensure_state_defaults(state, config)
+            observer = get_observer()
+            payload = {
+                "error": f"{type(exc).__name__}: {str(exc)[:1500]}",
+                "error_code": f"{node_name}_failed",
+                "retryable": False,
+                "fatal": True,
+            }
+            try:
+                observer.record_node_event(
+                    context,
+                    EventType.NODE_FAILED,
+                    node_name,
+                    message=f"{node_name} node failed.",
+                    payload=payload,
+                )
+                observer.record_run_event(
+                    context,
+                    EventType.RUN_FAILED,
+                    message="Research run failed.",
+                    payload=payload,
+                )
+            except Exception:
+                # Observability must preserve the original application exception.
+                pass
+            raise
+
+    observed.__name__ = f"observed_{node_name}"
+    return observed
+
+
 def create_research_graph(checkpointer: AsyncSqliteSaver) -> StateGraph:
     """构建 v2 研究图：planner 与 researcher/distiller 循环，最终进入 writer。"""
     workflow = StateGraph(ResearchGraphState)
 
-    workflow.add_node("planner", planner)
-    workflow.add_node("researcher", researcher_async)
-    workflow.add_node("distiller", distiller_async)
-    workflow.add_node("writer", writer_async)
+    workflow.add_node("planner", _with_failure_events("planner", planner))
+    workflow.add_node("researcher", _with_failure_events("researcher", researcher_async))
+    workflow.add_node("distiller", _with_failure_events("distiller", distiller_async))
+    workflow.add_node("writer", _with_failure_events("writer", writer_async))
 
     workflow.set_entry_point("planner")
 

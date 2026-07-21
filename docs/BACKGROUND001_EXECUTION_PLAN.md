@@ -119,7 +119,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | # | Branch | Status | Integration commit | Notes |
 | --- | --- | --- | --- | --- |
 | 00 | `codex/bg001-00-foundation-contracts-baseline` | integrated | e406407 | Contracts, Frozen Replay, baseline, ADRs, and order-independent tests complete. |
-| 01 | `codex/bg001-01-event-trace-store` | pending | | |
+| 01 | `codex/bg001-01-event-trace-store` | implemented; merge pending | pending | Append-only SQLite event store, instrumentation, redaction, and durable OTLP outbox complete. |
 | 02 | `codex/bg001-02-artifact-knowledge-storage` | pending | | |
 | 03 | `codex/bg001-03-studio-v1` | pending | | |
 | 04 | `codex/bg001-04-agent-kernel` | pending | | |
@@ -614,4 +614,34 @@ Remote push: verified successful to origin/codex/bg001-integration on 2026-07-22
 Remaining risks: The captured draft baseline intentionally records missing
   model/tool trace coverage and uninstrumented token, cost, and latency. These
   are owned by branches 01, 04, and 10 rather than disguised in foundation.
+```
+
+### Branch 01 execution record
+
+```text
+Branch: codex/bg001-01-event-trace-store
+Started from integration commit: a8f0b47
+Scope delivered: Storage-neutral EventStore API; transactional SQLite schema
+  and migrations; indexed run/event catalog and pagination; idempotency,
+  continuous ordering, span and terminal invariants; checksums, integrity audit,
+  backup/restore; redaction and bounded decision summaries; durable export
+  outbox and OTLP/HTTP JSON exporter; persistent compatibility observer; actual
+  graph, model, search, scraper, retry, budget, evidence, report, and failure
+  instrumentation; production run_research event runtime wiring.
+Boundary check: No artifact bodies, Studio projection/UI, replay, AgentKernel,
+  task scheduler, GraphState thinning, planner strategy, research decisions, or
+  writer synthesis behavior was added or changed. Provider changes are limited
+  to emitting retry telemetry from the existing retry path.
+Tests: 111 passed in normal order and 111 passed with test files in reverse
+  order; Frozen Replay exactly matched the branch-00 baseline.
+Failure/recovery tests: Same-process and cross-connection concurrent appends,
+  observer/store restart, v1 migration with existing data, checksum corruption,
+  orphan/open-child spans, sequence conflicts, duplicate terminal, long-run
+  pagination, backup/restore, redaction, graph failure, retry callback, OTLP
+  transport failure, durable outbox restart/retry, and real model usage paths.
+Integration merge commit: pending
+Remote push: pending
+Remaining risks: Console continues to use its draft MemoryObserver until Studio
+  V1 branch 03 replaces it with event projections. Artifact bodies and replay
+  remain deliberately absent per this branch boundary.
 ```

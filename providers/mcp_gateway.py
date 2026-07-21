@@ -1,7 +1,7 @@
 import asyncio
 import httpx
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass
 
 from schemas.state import SearchResult
@@ -80,6 +80,7 @@ class TavilySearchProvider(BaseMCPHandler):
     async def _search(self, params: Dict[str, Any]) -> MCPToolResult:
         query = params.get("query", "")
         max_results = params.get("max_results", 5)
+        on_retry = params.get("_on_retry")
 
         if not self.api_key or self.api_key == "demo":
             return MCPToolResult(
@@ -130,6 +131,8 @@ class TavilySearchProvider(BaseMCPHandler):
                     response_text = e.response.text[:500] if e.response is not None else ""
                     retryable = status_code in self.retryable_status_codes
                     if retryable and attempt < max_attempts:
+                        if callable(on_retry):
+                            on_retry({"attempt": attempt + 1, "status_code": status_code, "error_type": "HTTPStatusError"})
                         await asyncio.sleep(0.5 * attempt)
                         continue
                     detail = f"HTTP error: {status_code}"
@@ -148,6 +151,8 @@ class TavilySearchProvider(BaseMCPHandler):
                 except Exception as e:
                     retryable = isinstance(e, self.retryable_exceptions)
                     if retryable and attempt < max_attempts:
+                        if callable(on_retry):
+                            on_retry({"attempt": attempt + 1, "error_type": type(e).__name__})
                         await asyncio.sleep(0.5 * attempt)
                         continue
                     return MCPToolResult(
@@ -282,9 +287,18 @@ class MCPGateway:
         except Exception as e:
             return MCPToolResult(success=False, data=None, error=_format_exception(e), tool_name=tool_name)
 
-    async def search(self, query: str, max_results: int = 5, provider: str = "tavily") -> List[SearchResult]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        provider: str = "tavily",
+        on_retry: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> List[SearchResult]:
         tool_name = f"{provider}_search"
-        result = await self.call_tool(tool_name, {"query": query, "max_results": max_results})
+        result = await self.call_tool(
+            tool_name,
+            {"query": query, "max_results": max_results, "_on_retry": on_retry},
+        )
 
         if result.success:
             return result.data
