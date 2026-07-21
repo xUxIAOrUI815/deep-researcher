@@ -610,7 +610,7 @@ Tests: 92 passed in normal order; 92 passed with test files in reverse order;
 Failure/recovery tests: Existing session restart/recovery, graph persistence,
   error-path, and offline integration cases are included in both 92-test runs.
 Integration merge commit: e406407
-Remote push: pending
+Remote push: verified successful to origin/codex/bg001-integration on 2026-07-22
 Remaining risks: The captured draft baseline intentionally records missing
   model/tool trace coverage and uninstrumented token, cost, and latency. These
   are owned by branches 01, 04, and 10 rather than disguised in foundation.
