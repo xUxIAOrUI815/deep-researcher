@@ -118,7 +118,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 
 | # | Branch | Status | Integration commit | Notes |
 | --- | --- | --- | --- | --- |
-| 00 | `codex/bg001-00-foundation-contracts-baseline` | implemented; merge pending | pending | Contracts, Frozen Replay, baseline, ADRs, and order-independent tests complete. |
+| 00 | `codex/bg001-00-foundation-contracts-baseline` | integrated | e406407 | Contracts, Frozen Replay, baseline, ADRs, and order-independent tests complete. |
 | 01 | `codex/bg001-01-event-trace-store` | pending | | |
 | 02 | `codex/bg001-02-artifact-knowledge-storage` | pending | | |
 | 03 | `codex/bg001-03-studio-v1` | pending | | |
@@ -609,7 +609,7 @@ Tests: 92 passed in normal order; 92 passed with test files in reverse order;
   21 foundation/baseline cases passed; committed baseline replay reproduced.
 Failure/recovery tests: Existing session restart/recovery, graph persistence,
   error-path, and offline integration cases are included in both 92-test runs.
-Integration merge commit: pending
+Integration merge commit: e406407
 Remote push: pending
 Remaining risks: The captured draft baseline intentionally records missing
   model/tool trace coverage and uninstrumented token, cost, and latency. These
