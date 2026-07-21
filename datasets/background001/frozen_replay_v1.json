@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0.0",
+  "name": "current-draft-ai-chip-market-offline",
+  "description": "Frozen semantic inputs and mock provider outputs used to characterize the pre-refactor pipeline without live services.",
+  "deterministic_seed": 20260722,
+  "run_config": {
+    "configurable": {
+      "thread_id": "offline-thread",
+      "research_id": "offline-research"
+    }
+  },
+  "root_query": "What is the current state of the AI chip market in 2026?",
+  "task": {
+    "id": "task-1",
+    "query": "AI chip market 2026",
+    "title": "Current AI chip market",
+    "rationale": "Find evidence about market size, growth drivers, and disagreements in current estimates.",
+    "node_type": "question",
+    "priority": 0.9,
+    "related_fact_ids": [],
+    "related_evidence_ids": []
+  },
+  "report_outline": {
+    "title": "AI Chip Market 2026",
+    "sections": [
+      {"section_id": "sec_summary", "title": "Market Outlook", "goal": "Summarize the current market outlook", "order": 1},
+      {"section_id": "sec_conflict", "title": "Conflicting Estimates", "goal": "Compare conflicting market size estimates", "order": 2},
+      {"section_id": "sec_risks", "title": "Open Risks", "goal": "Describe unresolved risks and evidence gaps", "order": 3},
+      {"section_id": "sec_conclusion", "title": "Conclusion", "goal": "State what can be concluded from the current evidence", "order": 4}
+    ]
+  },
+  "section_goals": [
+    {"section_id": "sec_summary", "goal": "Summarize the current market outlook", "priority": 1.0},
+    {"section_id": "sec_conflict", "goal": "Compare conflicting market size estimates", "priority": 0.95},
+    {"section_id": "sec_risks", "goal": "Describe unresolved risks and evidence gaps", "priority": 0.85},
+    {"section_id": "sec_conclusion", "goal": "State what can be concluded from the current evidence", "priority": 0.8}
+  ],
+  "mock_researcher_outputs": {
+    "task_id": "task-1",
+    "queries": [{"query": "AI chip market 2026", "relevance_score": 9, "scoring_method": "heuristic"}],
+    "sources": [
+      {"source_id": "src_1", "url": "https://mock.local/ai-chip/doc-1", "title": "AI chip market grows in 2026", "snippet": "Analysts reported revenue growth and new launches.", "score": 0.93, "status": "accepted", "text_length": 212, "extraction_method": "mock", "query": "AI chip market 2026"},
+      {"source_id": "src_2", "url": "https://mock.local/ai-chip/doc-2", "title": "Different outlook on AI chip revenue", "snippet": "Another report showed a smaller market size in 2026.", "score": 0.88, "status": "accepted", "text_length": 207, "extraction_method": "mock", "query": "AI chip market 2026"}
+    ],
+    "passages": [
+      {"passage_id": "p1", "source_id": "src_1", "url": "https://mock.local/ai-chip/doc-1", "title": "AI chip market grows in 2026", "query": "AI chip market 2026", "text": "The AI chip market reached 120 billion dollars in 2026. Analysts reported that demand increased because cloud providers expanded GPU spending. The report also said leading vendors launched new accelerator products."},
+      {"passage_id": "p2", "source_id": "src_2", "url": "https://mock.local/ai-chip/doc-2", "title": "Different outlook on AI chip revenue", "query": "AI chip market 2026", "text": "A separate industry report stated the AI chip market was 95 billion dollars in 2026. The authors argued that enterprise adoption grew more slowly than expected. The report defined AI chips mainly as training accelerators."}
+    ],
+    "metadata": {"stop_reason": "max_search_iterations_reached", "follow_up_hints": ["verify market size methodology", "check vendor launch timeline"], "scraper_mode": "mock", "search_mode": "mock"}
+  },
+  "fixture_fingerprint": "e4b3b4e8fedad18c5c505447f38fe00bc59054092d4738d96d020717fe806caa"
+}

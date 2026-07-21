@@ -418,6 +418,8 @@ class ResearchConsoleService:
     def _derive_stage(self, state: Dict[str, Any], handle: Optional[RunHandle], observer_events: List[Dict[str, Any]]) -> str:
         if state.get("final_report"):
             return "completed"
+        if handle and handle.status == "completed":
+            return "completed"
         if handle and handle.status == "failed":
             return "failed"
         if observer_events:
