@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import time
+import uuid
 from typing import List, Optional, Dict, Any, Iterable
 
 import httpx
@@ -195,6 +197,21 @@ async def _distill_with_deepseek(
     async with httpx.AsyncClient(timeout=float(os.getenv("DISTILLER_LLM_TIMEOUT", "45"))) as client:
         for passage in clean_passages[:max_passages]:
             prompt = _build_distiller_prompt(task=task, passage=passage, max_chars=max_chars)
+            operation_id = f"operation_{uuid.uuid4().hex}"
+            started = time.perf_counter()
+            if run_context is not None:
+                get_observer().record_task_event(
+                    run_context,
+                    EventType.MODEL_STARTED,
+                    task_id or "unknown-task",
+                    message="Distiller started grounded model extraction.",
+                    payload={
+                        "operation_id": operation_id,
+                        "model": model,
+                        "purpose": "evidence_distillation",
+                        "passage_id": passage.get("passage_id"),
+                    },
+                )
             try:
                 response = await client.post(
                     _deepseek_chat_url(),
@@ -220,7 +237,8 @@ async def _distill_with_deepseek(
                     },
                 )
                 response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                response_payload = response.json()
+                content = response_payload["choices"][0]["message"]["content"]
                 payload = _parse_llm_json(content)
                 new_facts, new_claims, new_evidence = _materialize_distillation_payload(
                     payload,
@@ -230,8 +248,47 @@ async def _distill_with_deepseek(
                 facts.extend(new_facts)
                 claims.extend(new_claims)
                 evidence.extend(new_evidence)
+                if run_context is not None:
+                    usage = response_payload.get("usage", {}) or {}
+                    get_observer().record_task_event(
+                        run_context,
+                        EventType.MODEL_COMPLETED,
+                        task_id or "unknown-task",
+                        message="Distiller completed grounded model extraction.",
+                        payload={
+                            "operation_id": operation_id,
+                            "model": model,
+                            "passage_id": passage.get("passage_id"),
+                            "fact_count": len(new_facts),
+                            "claim_count": len(new_claims),
+                            "evidence_count": len(new_evidence),
+                            "latency_ms": (time.perf_counter() - started) * 1000.0,
+                            "usage": {
+                                "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                                "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+                                "model_calls": 1,
+                            },
+                        },
+                    )
             except Exception as exc:
                 errors.append(f"{type(exc).__name__}: {str(exc)[:240]}")
+                if run_context is not None:
+                    get_observer().record_task_event(
+                        run_context,
+                        EventType.MODEL_FAILED,
+                        task_id or "unknown-task",
+                        message="Distiller model extraction failed for one passage.",
+                        payload={
+                            "operation_id": operation_id,
+                            "model": model,
+                            "passage_id": passage.get("passage_id"),
+                            "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+                            "retryable": isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)),
+                            "fatal": False,
+                            "latency_ms": (time.perf_counter() - started) * 1000.0,
+                            "usage": {"model_calls": 1, "errors": 1},
+                        },
+                    )
 
     note = "DeepSeek distiller completed."
     if errors:

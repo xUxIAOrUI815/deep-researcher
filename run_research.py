@@ -1,8 +1,11 @@
 import asyncio
+import os
 import sys
 sys.path.insert(0, '.')
 
+from core.observability import get_observer, set_observer
 from core.graph import run_research_cycle
+from deep_researcher.events import build_event_runtime
 
 
 async def main():
@@ -10,7 +13,14 @@ async def main():
     print("Starting AIRE Research Cycle")
     print("="*60)
 
-    result = await run_research_cycle("Test research query")
+    previous_observer = get_observer()
+    runtime = build_event_runtime(os.getenv("EVENT_STORE_PATH", "event_data/research_events.sqlite3"))
+    set_observer(runtime.observer)
+    try:
+        result = await run_research_cycle("Test research query")
+    finally:
+        set_observer(previous_observer)
+        runtime.close()
 
     print("\n" + "="*60)
     print("Final State Summary:")
