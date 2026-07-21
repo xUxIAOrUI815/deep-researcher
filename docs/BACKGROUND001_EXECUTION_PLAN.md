@@ -120,7 +120,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | --- | --- | --- | --- | --- |
 | 00 | `codex/bg001-00-foundation-contracts-baseline` | integrated | e406407 | Contracts, Frozen Replay, baseline, ADRs, and order-independent tests complete. |
 | 01 | `codex/bg001-01-event-trace-store` | integrated | 7a90c9a | Append-only SQLite event store, instrumentation, redaction, and durable OTLP outbox complete. |
-| 02 | `codex/bg001-02-artifact-knowledge-storage` | pending | | |
+| 02 | `codex/bg001-02-artifact-knowledge-storage` | integrated | 58de1c2 | Immutable content-addressed artifacts, revisioned evidence repositories, ingestion/retrieval/projection split, and durable pipeline dual-write complete. |
 | 03 | `codex/bg001-03-studio-v1` | pending | | |
 | 04 | `codex/bg001-04-agent-kernel` | pending | | |
 | 05 | `codex/bg001-05-protocol-tool-gateway` | pending | | |
@@ -644,4 +644,42 @@ Remote push: verified successful to origin/codex/bg001-integration on 2026-07-22
 Remaining risks: Console continues to use its draft MemoryObserver until Studio
   V1 branch 03 replaces it with event projections. Artifact bodies and replay
   remain deliberately absent per this branch boundary.
+```
+
+### Branch 02 execution record
+
+```text
+Branch: codex/bg001-02-artifact-knowledge-storage
+Started from integration commit: 6b72c55
+Scope delivered: Immutable content-addressed ArtifactStore for every artifact
+  kind with provenance, explicit redaction, typed links, migrations, pagination,
+  checksums, integrity audit, backup/restore, and concurrent access; revisioned
+  Source -> Snapshot -> Passage -> Evidence -> Fact -> Claim -> Citation ->
+  Conflict/Section/Report repositories with typed relationships and run-scoped
+  natural identities; deterministic normalization and deduplication; optional
+  vector adapter; complete retrieval and rebuildable projection adapters;
+  manifest-verified KnowledgeRuntime backups; actual source-body persistence,
+  source versioning, replay-idempotent ingestion, and controlled graph dual-write.
+Boundary check: No claim verification, evidence judgment, planning strategy,
+  writer synthesis, scheduler, Studio, protocol gateway, AgentKernel, evaluation,
+  evolution, or RL behavior was implemented. Existing agent outputs and Frozen
+  Replay remain unchanged; legacy session knowledge is retained only as a
+  transitional draft input path.
+Tests: 126 passed in normal order and 126 passed with test files in reverse
+  order; 15 branch-specific storage/ingestion cases passed; Frozen Replay
+  exactly matched the branch-00 baseline; integration branch rerun passed 126.
+Failure/recovery tests: Same-process and cross-connection artifact/knowledge
+  writes, cross-run collision and relationship rejection, missing/wrong-type
+  references, immutable-row enforcement, stable cursor pagination, v1 migration
+  with retained data, restart, checksummed backup/restore, manifest validation,
+  body/envelope/entity corruption, redaction, source-version changes, idempotent
+  replay, full typed evidence traversal, optional vector ranking, and graph
+  dual-write are covered.
+Integration merge commit: 58de1c2
+Remote push: feature and integration commits verified successful to origin on
+  2026-07-22.
+Remaining risks: Console still reads the draft MemoryObserver/session projection
+  until branch 03 installs persistent Studio projections. The graph dual-write
+  setter and legacy session manager remain transitional and are removed when
+  branch 15 switches every entry point to the new runtime.
 ```
