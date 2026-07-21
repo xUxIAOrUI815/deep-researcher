@@ -1,0 +1,62 @@
+{
+  "citations": {
+    "citation_map_reference_count": 108,
+    "markdown_reference_count": 44,
+    "sections_with_citations": 4
+  },
+  "failures": {
+    "error_code": "",
+    "failed_task_count": 0,
+    "has_error_state": false
+  },
+  "knowledge": {
+    "atomic_fact_count": 2,
+    "claim_count": 39,
+    "conflict_count": 189,
+    "evidence_count": 59,
+    "mean_section_coverage": 1.0,
+    "section_pack_count": 4
+  },
+  "report": {
+    "character_count": 4963,
+    "has_executive_summary": true,
+    "has_open_questions": true,
+    "nonempty": true,
+    "section_count": 4
+  },
+  "resources": {
+    "cost_instrumented": false,
+    "cost_usd": 0.0,
+    "latency_instrumented": false,
+    "latency_ms": 0.0,
+    "token_usage": {
+      "distillation_tokens": 0,
+      "planning_tokens": 0,
+      "research_tokens": 0,
+      "total_tokens": 0,
+      "writing_tokens": 0
+    }
+  },
+  "retrieval": {
+    "accepted_source_count": 10,
+    "passage_count": 10,
+    "query_count": 4,
+    "source_count": 10,
+    "unique_source_url_count": 10
+  },
+  "schema_version": "1.0.0",
+  "trace": {
+    "event_types": [
+      "planner.decision",
+      "report.finalized",
+      "run.started",
+      "task.created",
+      "task.defer",
+      "task.status_changed"
+    ],
+    "has_model_usage_events": false,
+    "has_run_events": true,
+    "has_tool_usage_events": false,
+    "state_event_count": 21
+  }
+}
