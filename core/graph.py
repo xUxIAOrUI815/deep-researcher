@@ -52,6 +52,15 @@ SESSION_RETRIEVAL_SERVICE = SessionRetrievalService(SESSION_KNOWLEDGE_MANAGER)
 PLANNER_CONTEXT_BUILDER = PlannerContextBuilder(SESSION_RETRIEVAL_SERVICE)
 RESEARCHER_CONTEXT_BUILDER = ResearcherContextBuilder(SESSION_RETRIEVAL_SERVICE)
 WRITER_CONTEXT_BUILDER = WriterContextBuilder(SESSION_RETRIEVAL_SERVICE)
+DURABLE_KNOWLEDGE_INGESTOR: Any | None = None
+
+
+def set_durable_knowledge_ingestor(ingestor: Any | None) -> Any | None:
+    """Install the transitional v2 ingestion sink and return the prior sink."""
+    global DURABLE_KNOWLEDGE_INGESTOR
+    previous = DURABLE_KNOWLEDGE_INGESTOR
+    DURABLE_KNOWLEDGE_INGESTOR = ingestor
+    return previous
 
 
 GraphState = ResearchGraphState
@@ -534,6 +543,10 @@ async def researcher_async(state: GraphState, config: Optional[RunnableConfig] =
 
     outputs = await _call_researcher_agent(state, context)
     state["researcher_outputs"] = outputs.model_dump()
+    if DURABLE_KNOWLEDGE_INGESTOR is not None:
+        DURABLE_KNOWLEDGE_INGESTOR.ingest_researcher_outputs(
+            state["researcher_outputs"], run_id=context.run_id, task_id=task_id
+        )
 
     _record_budget_snapshot(state, context, "researcher")
 
@@ -575,6 +588,10 @@ async def distiller_async(state: GraphState, config: Optional[RunnableConfig] = 
         state["knowledge_refs"] = outputs.knowledge_refs
     if outputs.atomic_facts:
         state["atomic_facts"] = [fact.model_dump() for fact in outputs.atomic_facts]
+    if DURABLE_KNOWLEDGE_INGESTOR is not None:
+        DURABLE_KNOWLEDGE_INGESTOR.ingest_distiller_outputs(
+            state["distiller_outputs"], run_id=context.run_id, task_id=state.get("active_task_id")
+        )
 
     task_id = state.get("active_task_id")
     if task_id:
@@ -600,6 +617,14 @@ async def writer_async(state: GraphState, config: Optional[RunnableConfig] = Non
 
     report = await _call_writer_agent(state, context)
     state["final_report"] = report.model_dump()
+    if DURABLE_KNOWLEDGE_INGESTOR is not None:
+        DURABLE_KNOWLEDGE_INGESTOR.ingest_report(
+            state["final_report"],
+            report_outline=state.get("report_outline", {}),
+            run_id=context.run_id,
+            thread_id=context.thread_id,
+            research_question=state.get("user_query") or state.get("normalized_query") or context.root_query,
+        )
     SESSION_KNOWLEDGE_MANAGER.store.update_session_status(
         context.research_id,
         status="completed",
