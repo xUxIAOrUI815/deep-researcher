@@ -122,7 +122,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 01 | `codex/bg001-01-event-trace-store` | integrated | 7a90c9a | Append-only SQLite event store, instrumentation, redaction, and durable OTLP outbox complete. |
 | 02 | `codex/bg001-02-artifact-knowledge-storage` | integrated | 58de1c2 | Immutable content-addressed artifacts, revisioned evidence repositories, ingestion/retrieval/projection split, and durable pipeline dual-write complete. |
 | 03 | `codex/bg001-03-studio-v1` | integrated | 56224fe | Persistent event-derived Thread/Run/Span projections, searchable/paginated SSE timeline, trace export, masking, and Console trace migration complete. |
-| 04 | `codex/bg001-04-agent-kernel` | feature complete; integration pending | | Complete Observe-Decide-Act-Verify kernel, middleware, budgets, stops, policies, normalized observations, and durable trace adapter. |
+| 04 | `codex/bg001-04-agent-kernel` | integrated | 453c564 | Complete Observe-Decide-Act-Verify kernel, middleware, budgets, stops, policies, normalized observations, and durable trace adapter. |
 | 05 | `codex/bg001-05-protocol-tool-gateway` | pending | | |
 | 06 | `codex/bg001-06-orchestration-runtime` | pending | | |
 | 07 | `codex/bg001-07-evidence-engine-verifier` | pending | | |
@@ -743,15 +743,17 @@ Boundary check: No scheduler, durable task queue/DAG, task-state ownership,
 Tests: 177 tests passed in normal order and 177 passed with test files in
   reverse order; 45 deterministic branch-specific cases cover every command
   kind, observation status, required stop, schema repair, policy, middleware,
-  budget, deadline, and multiple-AgentSpec path.
+  budget, deadline, and multiple-AgentSpec path; the integration branch rerun
+  passed all 177 tests.
 Failure/recovery tests: Model/action/verifier retry and permanent failure,
   malformed and repeatedly invalid schema, repair-provider failure, context
   exhaustion, active cancellation, wall-time interruption, repeated errors,
   no-gain convergence, invalid executor output, identity injection, redaction,
   approval/denial, exact budget ceilings, event-store span balancing, sequence
   ordering, and persistent success/failure trace integrity are covered.
-Integration merge commit: pending
-Remote push: pending
+Integration merge commit: 453c564
+Remote push: feature commit d8f9cc1 and integration commits verified successful
+  to origin on 2026-07-22.
 Remaining risks: The legacy draft graph intentionally does not instantiate the
   new kernel yet. Branches 05-09 provide real protocol adapters, durable
   scheduling, evidence verification, and the five role AgentSpecs before branch
