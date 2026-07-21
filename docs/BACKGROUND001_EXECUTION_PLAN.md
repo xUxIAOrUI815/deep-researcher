@@ -122,7 +122,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 01 | `codex/bg001-01-event-trace-store` | integrated | 7a90c9a | Append-only SQLite event store, instrumentation, redaction, and durable OTLP outbox complete. |
 | 02 | `codex/bg001-02-artifact-knowledge-storage` | integrated | 58de1c2 | Immutable content-addressed artifacts, revisioned evidence repositories, ingestion/retrieval/projection split, and durable pipeline dual-write complete. |
 | 03 | `codex/bg001-03-studio-v1` | integrated | 56224fe | Persistent event-derived Thread/Run/Span projections, searchable/paginated SSE timeline, trace export, masking, and Console trace migration complete. |
-| 04 | `codex/bg001-04-agent-kernel` | pending | | |
+| 04 | `codex/bg001-04-agent-kernel` | feature complete; integration pending | | Complete Observe-Decide-Act-Verify kernel, middleware, budgets, stops, policies, normalized observations, and durable trace adapter. |
 | 05 | `codex/bg001-05-protocol-tool-gateway` | pending | | |
 | 06 | `codex/bg001-06-orchestration-runtime` | pending | | |
 | 07 | `codex/bg001-07-evidence-engine-verifier` | pending | | |
@@ -716,4 +716,46 @@ Remote push: feature and integration commits verified successful to origin on
 Remaining risks: Existing non-Studio Console report/task/context panels still
   use transitional draft graph/session data. Branches 06, 12, and 15 replace
   those panels with task/evidence projections and complete entry-point migration.
+```
+
+### Branch 04 execution record
+
+```text
+Branch: codex/bg001-04-agent-kernel
+Started from integration commit: acf00ef
+Scope delivered: Complete framework-independent Observe -> Decide -> Act ->
+  Verify task loop; required immutable AgentSpec registry; typed model, action,
+  verification, cancellation, and event interfaces; deterministic structured
+  command parsing and identity normalization; bounded schema repair; context
+  trimming, recursive redaction, complete component-version injection, hard
+  policy checks, argument constraints, risk approval, expiry, and tool ceilings;
+  normalized observations and errors; semantic repair feedback; all eight
+  budget dimensions plus deadline interruption; every required stop policy;
+  structured TaskResult/KernelRunResult; and a persistent EventRecorder adapter
+  with balanced Agent/Model/Tool spans on success, failure, repair, timeout, and
+  cancellation paths.
+Boundary check: No scheduler, durable task queue/DAG, task-state ownership,
+  provider-specific Function Calling/MCP/A2A transport, research-role business
+  logic, claim/evidence verification semantics, evidence persistence, report
+  writing, evaluation, evolution, UI, or RL work was added. The kernel depends
+  only on contracts and injected interfaces; event persistence is isolated in
+  the explicit event-sink adapter.
+Tests: 177 tests passed in normal order and 177 passed with test files in
+  reverse order; 45 deterministic branch-specific cases cover every command
+  kind, observation status, required stop, schema repair, policy, middleware,
+  budget, deadline, and multiple-AgentSpec path.
+Failure/recovery tests: Model/action/verifier retry and permanent failure,
+  malformed and repeatedly invalid schema, repair-provider failure, context
+  exhaustion, active cancellation, wall-time interruption, repeated errors,
+  no-gain convergence, invalid executor output, identity injection, redaction,
+  approval/denial, exact budget ceilings, event-store span balancing, sequence
+  ordering, and persistent success/failure trace integrity are covered.
+Integration merge commit: pending
+Remote push: pending
+Remaining risks: The legacy draft graph intentionally does not instantiate the
+  new kernel yet. Branches 05-09 provide real protocol adapters, durable
+  scheduling, evidence verification, and the five role AgentSpecs before branch
+  15 switches production entry points. Persistent cross-release version
+  promotion remains owned by branch 11; this branch registry is the immutable
+  task-runtime resolver.
 ```
