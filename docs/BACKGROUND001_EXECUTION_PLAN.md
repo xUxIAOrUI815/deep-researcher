@@ -123,7 +123,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 02 | `codex/bg001-02-artifact-knowledge-storage` | integrated | 58de1c2 | Immutable content-addressed artifacts, revisioned evidence repositories, ingestion/retrieval/projection split, and durable pipeline dual-write complete. |
 | 03 | `codex/bg001-03-studio-v1` | integrated | 56224fe | Persistent event-derived Thread/Run/Span projections, searchable/paginated SSE timeline, trace export, masking, and Console trace migration complete. |
 | 04 | `codex/bg001-04-agent-kernel` | integrated | 453c564 | Complete Observe-Decide-Act-Verify kernel, middleware, budgets, stops, policies, normalized observations, and durable trace adapter. |
-| 05 | `codex/bg001-05-protocol-tool-gateway` | feature complete; integration pending | | Function Calling, real MCP/A2A transports, governed versioned tools, and Tavily/Exa/scraper adapters complete. |
+| 05 | `codex/bg001-05-protocol-tool-gateway` | integrated | aa4ab3e | Function Calling, real MCP/A2A transports, governed versioned tools, and Tavily/Exa/scraper adapters complete. |
 | 06 | `codex/bg001-06-orchestration-runtime` | pending | | |
 | 07 | `codex/bg001-07-evidence-engine-verifier` | pending | | |
 | 08 | `codex/bg001-08-supervisor-worker-pool` | pending | | |
@@ -793,7 +793,8 @@ Tests: 214 tests passed in normal order and 214 passed with test files in
   reverse order; 43 gateway/protocol/adapter/researcher cases passed. Real MCP
   stdio subprocess and Streamable HTTP servers and official A2A protobuf/SDK
   transport paths are exercised. The Studio polling/WAL concurrency regression
-  passed five consecutive repetitions after bounded connection hardening.
+  passed five consecutive repetitions after bounded connection hardening; the
+  post-merge integration rerun also passed all 214 tests in both orders.
 Failure/recovery tests: Registry immutability/version activation, malformed
   Function Calls, permission and approval rejection, SSRF and output safety,
   durable idempotent replay and cache restart, concurrent duplicate calls,
@@ -802,8 +803,9 @@ Failure/recovery tests: Registry immutability/version activation, malformed
   close/health/session/timeout/cancellation, A2A version/binding/auth/timeout/
   cancellation/message-only response/stream identity, missing provider keys,
   HTTP failures, provider fallback, and isolated offline state are covered.
-Integration merge commit: pending
-Remote push: pending
+Integration merge commit: aa4ab3e
+Remote push: feature commit 2de448b and integration commits verified successful
+  to origin on 2026-07-23.
 Remaining risks: The transitional draft graph invokes the governed research
   facade but does not yet make MCP/A2A transport or AgentKernel the universal
   production entry point. Branch 06 owns durable orchestration and state
