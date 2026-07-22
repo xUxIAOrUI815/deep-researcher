@@ -7,7 +7,7 @@ load_dotenv()
 
 sys.path.insert(0, '.')
 
-from providers import MCPGateway, SmartScraper, DenoiseStats
+from providers import ResearchToolGateway, SmartScraper, DenoiseStats
 
 
 async def research_topic(topic: str):
@@ -15,13 +15,14 @@ async def research_topic(topic: str):
     print(f"研究主题: {topic}")
     print("=" * 60)
 
-    gateway = MCPGateway()
+    gateway = ResearchToolGateway()
     scraper = SmartScraper(timeout=20.0, maxConcurrency=3)
 
     print("\n[1] 调用 Tavily 搜索...")
     search_results = await gateway.search(topic, max_results=5, provider="tavily")
 
     if not search_results:
+        gateway.close()
         print("未找到相关结果")
         return
 
@@ -89,6 +90,7 @@ async def research_topic(topic: str):
         print("\n[4] 没有有效内容可显示（所有页面均被语义过滤器丢弃）")
 
     await scraper.close()
+    gateway.close()
 
     print("\n" + "=" * 60)
     print("抓取完成")
@@ -125,15 +127,15 @@ async def interactive_mode():
             print(f"\n错误: {e}\n")
 
 
-async def test_mcp_gateway():
+async def test_tool_gateway():
     print("=" * 60)
-    print("TEST 1: MCP Gateway - Tavily Search")
+    print("TEST 1: Protocol Tool Gateway - Tavily Search")
     print("=" * 60)
 
-    gateway = MCPGateway()
+    gateway = ResearchToolGateway()
 
-    tool_defs = gateway.get_tool_definitions()
-    print(f"Available tools: {[t['name'] for t in tool_defs]}")
+    tool_defs = gateway.definitions()
+    print(f"Available tools: {[item.name for item in tool_defs]}")
 
     results = await gateway.search("artificial intelligence trends 2024", max_results=5, provider="tavily")
 
@@ -144,15 +146,16 @@ async def test_mcp_gateway():
         print(f"      Score: {result.score}")
         print(f"      Snippet: {result.snippet[:100]}...")
 
+    gateway.close()
     return results
 
 
 async def test_exa_provider():
     print("\n" + "=" * 60)
-    print("TEST 2: MCP Gateway - Exa Search")
+    print("TEST 2: Protocol Tool Gateway - Exa Search")
     print("=" * 60)
 
-    gateway = MCPGateway()
+    gateway = ResearchToolGateway()
 
     results = await gateway.search("machine learning breakthroughs", max_results=3, provider="exa")
 
@@ -161,6 +164,7 @@ async def test_exa_provider():
         print(f"\n  [{i}] {result.title}")
         print(f"      URL: {result.url}")
 
+    gateway.close()
     return results
 
 
@@ -332,7 +336,7 @@ async def test_denoise_pipeline():
 
 
 async def run_all_tests():
-    await test_mcp_gateway()
+    await test_tool_gateway()
     await test_exa_provider()
     await test_smart_scraper()
     await test_playwright_fallback()
