@@ -11,15 +11,25 @@ import aiosqlite
 
 async def init_sqlite_saver(db_path: str = "research.db") -> AsyncSqliteSaver:
     """初始化 SQLite checkpointer，并设置 WAL、同步模式和超时参数。"""
-    conn = await aiosqlite.connect(db_path)
-    await conn.execute("PRAGMA journal_mode=WAL")
-    await conn.execute("PRAGMA synchronous=NORMAL")
-    await conn.execute("PRAGMA busy_timeout=5000")
-    await conn.commit()
-
-    saver = AsyncSqliteSaver(conn)
-
-    return saver
+    conn = await aiosqlite.connect(db_path, timeout=30.0)
+    try:
+        # Apply the lock wait before journal negotiation. Console polling can
+        # open a reader while the background graph is initializing the same DB.
+        await conn.execute("PRAGMA busy_timeout=30000")
+        for attempt in range(5):
+            try:
+                await conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except aiosqlite.OperationalError as exc:
+                if "locked" not in str(exc).casefold() or attempt == 4:
+                    raise
+                await asyncio.sleep(0.05 * (2**attempt))
+        await conn.execute("PRAGMA synchronous=NORMAL")
+        await conn.commit()
+    except BaseException:
+        await conn.close()
+        raise
+    return AsyncSqliteSaver(conn)
 
 from langchain_core.runnables import RunnableConfig
 

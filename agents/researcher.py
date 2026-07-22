@@ -14,7 +14,13 @@ import httpx
 from core.context_builders import ResearcherContextBuilder
 from core.observability import EventType, get_observer
 from core.session_retrieval import SessionRetrievalService
-from providers import MCPGateway, MCPGatewayError, build_scraper, resolve_scraper_mode
+from providers import (
+    GatewayCallIdentity,
+    ResearchToolGateway,
+    ResearchToolGatewayError,
+    build_scraper,
+    resolve_scraper_mode,
+)
 from schemas.state import ResearcherOutputs, ScrapedData, SearchResult
 
 
@@ -325,7 +331,7 @@ def _format_exception(exc: Exception) -> str:
 
 
 def _is_recoverable_search_error(exc: Exception) -> bool:
-    if isinstance(exc, MCPGatewayError):
+    if isinstance(exc, ResearchToolGatewayError):
         return bool(exc.retryable)
     error_text = _format_exception(exc)
     fatal_markers = (
@@ -390,7 +396,7 @@ async def run_researcher(
     scraper_mode: Optional[str] = None,
     search_mode: Optional[str] = None,
     scraper_backend: Any = None,
-    search_gateway: Optional[MCPGateway] = None,
+    search_gateway: Optional[ResearchToolGateway] = None,
     scraper_fixtures: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> ResearcherOutputs:
     """执行检索探索流程，并返回供 distiller 使用的原始材料。"""
@@ -483,7 +489,17 @@ async def run_researcher(
     effective_scraper_mode = resolve_scraper_mode(scraper_mode)
     effective_search_mode = _resolve_search_mode(search_mode, effective_scraper_mode)
     scraper = scraper_backend or build_scraper(effective_scraper_mode, fixtures=scraper_fixtures)
-    gateway = search_gateway or MCPGateway()
+    owns_gateway = search_gateway is None
+    gateway = search_gateway or ResearchToolGateway(
+        scraper=scraper,
+        state_path=":memory:" if effective_search_mode == "mock" else None,
+        identity=GatewayCallIdentity(
+            run_id=str(getattr(run_context, "run_id", None) or "run_researcher"),
+            task_id=str(task_id),
+            correlation_id=str(getattr(run_context, "research_id", None) or "correlation_researcher"),
+            trace_id=str(getattr(run_context, "trace_id", None) or "trace_researcher"),
+        ),
+    )
     metadata["scraper_mode"] = getattr(scraper, "mode", effective_scraper_mode)
     metadata["search_mode"] = effective_search_mode
 
@@ -615,6 +631,8 @@ async def run_researcher(
             )
             if recoverable:
                 continue
+            if owns_gateway:
+                gateway.close()
             raise
         else:
             _emit_task_event(
@@ -666,10 +684,16 @@ async def run_researcher(
             )
             try:
                 source_context = {source["url"]: dict(source) for source in candidate_sources}
-                scraped_batch = await scraper.scrape_batch(
-                    [source["url"] for source in candidate_sources],
-                    source_context=source_context,
-                )
+                if hasattr(gateway, "scrape_batch"):
+                    scraped_batch = await gateway.scrape_batch(
+                        [source["url"] for source in candidate_sources],
+                        source_context=source_context,
+                    )
+                else:
+                    scraped_batch = await scraper.scrape_batch(
+                        [source["url"] for source in candidate_sources],
+                        source_context=source_context,
+                    )
                 for scraped in scraped_batch:
                     scraped_data_cache.append(scraped)
                     scraped_by_url[scraped.url] = scraped
@@ -812,7 +836,7 @@ async def run_researcher(
         },
     )
 
-    return ResearcherOutputs(
+    output = ResearcherOutputs(
         task_id=task_id,
         queries=admitted_queries,
         sources=accepted_sources,
@@ -828,6 +852,9 @@ async def run_researcher(
             f"for task {task_id} using {len(admitted_queries)} admitted queries."
         ),
     )
+    if owns_gateway:
+        gateway.close()
+    return output
 
 
 def _derive_follow_up_hints(sources: list[dict[str, Any]], task_query: str) -> list[str]:

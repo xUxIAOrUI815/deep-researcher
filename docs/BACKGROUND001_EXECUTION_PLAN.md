@@ -123,7 +123,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 02 | `codex/bg001-02-artifact-knowledge-storage` | integrated | 58de1c2 | Immutable content-addressed artifacts, revisioned evidence repositories, ingestion/retrieval/projection split, and durable pipeline dual-write complete. |
 | 03 | `codex/bg001-03-studio-v1` | integrated | 56224fe | Persistent event-derived Thread/Run/Span projections, searchable/paginated SSE timeline, trace export, masking, and Console trace migration complete. |
 | 04 | `codex/bg001-04-agent-kernel` | integrated | 453c564 | Complete Observe-Decide-Act-Verify kernel, middleware, budgets, stops, policies, normalized observations, and durable trace adapter. |
-| 05 | `codex/bg001-05-protocol-tool-gateway` | pending | | |
+| 05 | `codex/bg001-05-protocol-tool-gateway` | feature complete; integration pending | | Function Calling, real MCP/A2A transports, governed versioned tools, and Tavily/Exa/scraper adapters complete. |
 | 06 | `codex/bg001-06-orchestration-runtime` | pending | | |
 | 07 | `codex/bg001-07-evidence-engine-verifier` | pending | | |
 | 08 | `codex/bg001-08-supervisor-worker-pool` | pending | | |
@@ -760,4 +760,53 @@ Remaining risks: The legacy draft graph intentionally does not instantiate the
   15 switches production entry points. Persistent cross-release version
   promotion remains owned by branch 11; this branch registry is the immutable
   task-runtime resolver.
+```
+
+### Branch 05 execution record
+
+```text
+Branch: codex/bg001-05-protocol-tool-gateway
+Started from integration commit: 1fddfe8
+Scope delivered: Deterministic Function Calling normalization for generic,
+  OpenAI, Anthropic, and choice-envelope shapes; immutable versioned Tool
+  Registry; durable SQLite idempotency leases/results, cache, rate-limit
+  windows, circuit state, and checksummed audit events; permission, operation,
+  risk, approval, schema, SSRF/control-character safety, cost, timeout,
+  cancellation, retry, fallback, circuit, input/output normalization, and
+  AgentKernel Observation integration; official-SDK MCP 2025-11-25 host/client
+  lifecycle over stdio and Streamable HTTP with pagination-aware tools,
+  resources, prompts, schema mapping, health, session termination, timeout, and
+  cancellation; official-SDK A2A 1.0 discovery, binding/version validation,
+  TaskEnvelope submission, task status/cancel, artifact handoff and stream
+  accumulation, correlation/trace propagation, timeout/cancellation, and typed
+  failure classification; governed Tavily, Exa, and scraper Tool Adapters with
+  no production demo fallback; migration of the draft researcher and manual
+  smoke path away from fake MCP naming; protocol/deployment documentation.
+Boundary check: No task queue/DAG, dependency or priority scheduling, research
+  planning, task-state ownership, evidence/claim/citation mutation or
+  verification, report writing, role business logic, evaluation, evolution,
+  UI capability, or RL work was added. The only cross-boundary hardening is
+  SQLite checkpointer connection initialization: busy timeout is applied before
+  WAL negotiation with bounded lock retry and failed-connection cleanup; it
+  carries no scheduler semantics.
+Tests: 214 tests passed in normal order and 214 passed with test files in
+  reverse order; 43 gateway/protocol/adapter/researcher cases passed. Real MCP
+  stdio subprocess and Streamable HTTP servers and official A2A protobuf/SDK
+  transport paths are exercised. The Studio polling/WAL concurrency regression
+  passed five consecutive repetitions after bounded connection hardening.
+Failure/recovery tests: Registry immutability/version activation, malformed
+  Function Calls, permission and approval rejection, SSRF and output safety,
+  durable idempotent replay and cache restart, concurrent duplicate calls,
+  restart-safe rate limiting and circuit fallback, retry accounting, timeout,
+  cancellation, schema failures, audit corruption, MCP invalid input/version/
+  close/health/session/timeout/cancellation, A2A version/binding/auth/timeout/
+  cancellation/message-only response/stream identity, missing provider keys,
+  HTTP failures, provider fallback, and isolated offline state are covered.
+Integration merge commit: pending
+Remote push: pending
+Remaining risks: The transitional draft graph invokes the governed research
+  facade but does not yet make MCP/A2A transport or AgentKernel the universal
+  production entry point. Branch 06 owns durable orchestration and state
+  thinning; branches 07-09 own evidence and role semantics; branch 15 removes
+  the remaining draft paths. Cross-release policy promotion remains branch 11.
 ```

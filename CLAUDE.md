@@ -52,7 +52,7 @@ Each agent is a stateless function called from the graph. The graph handles stat
 
 - **planner** (`agents/planner.py`): Rule-based task decomposer. Breaks the root question into subtasks (`source_discovery`, `question`, `gap`), then on subsequent loops reads distiller outputs to create follow-up tasks from gaps/conflicts. Produces `PlannerState` with action (`continue_research`/`start_writing`/`stop`) and `TaskTreePatch` list. No LLM calls — purely heuristic.
 
-- **researcher** (`agents/researcher.py`): Search-and-scrape pipeline. Generates candidate queries from task fields, scores relevance (heuristic or DeepSeek), deduplicates via embedding cosine similarity, then searches (Tavily via MCPGateway or mock), scrapes pages (Jina/Playwright via SmartScraper), and returns `ResearcherOutputs` with passages/sources/scraped data.
+- **researcher** (`agents/researcher.py`): Search-and-scrape pipeline. Generates candidate queries from task fields, scores relevance (heuristic or DeepSeek), deduplicates via embedding cosine similarity, then searches and scrapes through governed Tool Adapters (or explicit offline mocks), and returns `ResearcherOutputs` with passages/sources/scraped data.
 
 - **distiller** (`agents/distiller.py`): Extracts structured knowledge from researcher outputs. Two modes: local (regex/heuristic) for offline tests, LLM (DeepSeek) for production. Produces `AtomicFact`, `Claim`, `Evidence`, `ConflictRecord` entities plus `SectionEvidencePack` bundles. Pushes results into `KnowledgeManager`.
 
@@ -73,7 +73,9 @@ Three builder classes that bridge session knowledge into each agent's input cont
 
 ### Providers (`providers/`)
 
-- `MCPGateway` — Unified search via Tavily API with retry/error classification
+- `ResearchToolGateway` — Governed Tavily, Exa, and scraper adapters with durable retry, fallback, idempotency, rate-limit, cache, and circuit state
+- `MCPProtocolClient` / `GatewayMCPHost` — Real pinned MCP client/host over stdio and Streamable HTTP
+- `A2AProtocolClient` — Pinned A2A task, status, cancellation, artifact, and correlation transport
 - `SmartScraper` / `MockScraper` — Web scraping with content denoising
 - `build_scraper(mode)` / `resolve_scraper_mode(override)` — factory functions
 
