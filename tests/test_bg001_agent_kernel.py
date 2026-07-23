@@ -755,15 +755,17 @@ async def test_kernel_enforces_retry_error_and_wall_time_budgets():
     assert error.stop_decision.reason == StopReason.BUDGET_EXHAUSTED
     assert BudgetDimension.ERRORS in error.stop_decision.exhausted_dimensions
 
+    wall_verifier = QueueVerifier([])
     wall_kernel, _ = _kernel(
         spec,
         QueueModel([_tool_response()]),
         QueueExecutor([RawObservation(status="succeeded", data={})], delay=0.2),
-        QueueVerifier([]),
+        wall_verifier,
     )
     wall = await wall_kernel.run(agent_spec_id=spec.agent_spec_id, task=_task("budget_wall", budget=_budget(max_wall_time_seconds=0.02)))
     assert wall.stop_decision.reason == StopReason.BUDGET_EXHAUSTED
     assert BudgetDimension.WALL_TIME in wall.stop_decision.exhausted_dimensions
+    assert wall_verifier.calls == []
     assert wall.observations[-1].status == ObservationStatus.TIMEOUT
 
 
