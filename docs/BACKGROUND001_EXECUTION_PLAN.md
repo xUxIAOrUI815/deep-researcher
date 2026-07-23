@@ -125,7 +125,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 04 | `codex/bg001-04-agent-kernel` | integrated | 453c564 | Complete Observe-Decide-Act-Verify kernel, middleware, budgets, stops, policies, normalized observations, and durable trace adapter. |
 | 05 | `codex/bg001-05-protocol-tool-gateway` | integrated | aa4ab3e | Function Calling, real MCP/A2A transports, governed versioned tools, and Tavily/Exa/scraper adapters complete. |
 | 06 | `codex/bg001-06-orchestration-runtime` | integrated | 0c2ba88 | Durable event-sourced task DAG, leases/recovery, HITL controls, hard scheduling budgets, and real thin-state LangGraph adapter complete. |
-| 07 | `codex/bg001-07-evidence-engine-verifier` | pending | | |
+| 07 | `codex/bg001-07-evidence-engine-verifier` | integrated | e9880da | Complete evidence graph, independent verification, six claim states, conflicts, coverage, bounded repair, and verified-only read boundary complete. |
 | 08 | `codex/bg001-08-supervisor-worker-pool` | pending | | |
 | 09 | `codex/bg001-09-synthesis-writer-reviewer` | pending | | |
 | 10 | `codex/bg001-10-evaluation-lab-core` | pending | | |
@@ -857,4 +857,55 @@ Remaining risks: The draft production graph does not instantiate this scheduler
   entry-point migration and deletion of fat GraphState paths. Scheduler DAG and
   budget events are not exposed in Studio V1; branch 12 owns their event-derived
   Studio V2 projections. Evidence-domain scheduling policies remain branch 08.
+```
+
+### Branch 07 execution record
+
+```text
+Branch: codex/bg001-07-evidence-engine-verifier
+Started from integration commit: 1ba61a2
+Scope delivered: Complete revisioned Source -> Snapshot -> Passage -> Evidence
+  -> Fact -> Claim -> Citation -> Section -> Report contracts and resolver;
+  persisted source level, publication/fetch/extraction timestamps and methods,
+  immutable hashes, exact quote/citation offsets and locations; strict candidate
+  and verified read boundaries; independent Evidence Verifier AgentSpec with
+  deterministic and shared-ModelAdapter semantic implementations, bounded
+  schema repair and full usage accounting; passage/snapshot integrity, quote
+  grounding, relation, fact, overreach, contradiction, source access,
+  publisher/domain independence, authority, primary-source, freshness, citation
+  path/accuracy/completeness, severe-conflict and section-coverage checks; exact
+  supported/partially_supported/contradicted/conflicted/unsupported/stale claim
+  outcomes; high-impact writing blockers; conflict severity, definitive
+  verified-evidence resolution and accepted-unresolved visibility; immutable
+  verification/repair artifacts, durable domain events, normalized graph-input
+  invalidation, idempotent replay, and crash reconstruction of missing feedback
+  and projections.
+Boundary check: No search/query scheduling, worker or supervisor task logic,
+  final report prose or writer behavior, source refetch or snapshot mutation,
+  scheduler state, Studio feature, evaluation/release gate, offline Skill/Prompt
+  optimization, online self-modification, or RL work was added. The draft graph
+  is unchanged except for its existing artifact/knowledge ingestion gaining the
+  evidence metadata required by this branch.
+Tests: 240 passed in normal order and 240 passed with test files in reverse
+  order before integration; 240 passed in both orders after the no-ff
+  integration merge. Fifteen branch-specific cases cover graph traceability,
+  all six claim states, high-impact gates, source independence, input-revision
+  invalidation, citation-only quote backfill, conflict resolution, section
+  coverage, verifier schema repair, durable events, and candidate/verified
+  isolation. Only upstream websockets/uvicorn deprecation warnings remain.
+Failure/recovery tests: Passage and snapshot hash mismatch, quote and citation
+  grounding/location failure, repair-budget exhaustion, duplicate event and
+  revision replay, unchanged distiller replay after verification, process
+  restart, verification-result commit followed by repair/projection crash,
+  missing feedback reconstruction, changed source authority re-verification,
+  rejected unverified conflict resolution, accepted-unresolved conflicts, and
+  immutable snapshot-history checks are covered.
+Integration merge commit: e9880da
+Remote push: feature commit ec65dc4 pushed successfully; integration push is
+  recorded by the immediately following plan commit on 2026-07-24.
+Remaining risks: Branch 08 must make Supervisor/Worker convergence consume
+  high-impact blockers, coverage gaps, conflict state and structured repair
+  feedback through the durable scheduler. Branch 09 must enforce the verified
+  read boundary in Writer/Reviewer role loops. Production entry points remain
+  on the transitional draft graph until branch 15, as planned.
 ```
