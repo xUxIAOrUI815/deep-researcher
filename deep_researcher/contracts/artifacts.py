@@ -25,6 +25,8 @@ class ArtifactKind(str, Enum):
     RUBRIC = "rubric"
     DATASET_SAMPLE = "dataset_sample"
     EVALUATION_RESULT = "evaluation_result"
+    VERIFICATION_RESULT = "verification_result"
+    REPAIR_FEEDBACK = "repair_feedback"
     TRACE_EXPORT = "trace_export"
     STATE_PATCH = "state_patch"
     OTHER = "other"
