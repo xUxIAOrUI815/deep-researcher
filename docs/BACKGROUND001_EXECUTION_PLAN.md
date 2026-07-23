@@ -124,7 +124,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 03 | `codex/bg001-03-studio-v1` | integrated | 56224fe | Persistent event-derived Thread/Run/Span projections, searchable/paginated SSE timeline, trace export, masking, and Console trace migration complete. |
 | 04 | `codex/bg001-04-agent-kernel` | integrated | 453c564 | Complete Observe-Decide-Act-Verify kernel, middleware, budgets, stops, policies, normalized observations, and durable trace adapter. |
 | 05 | `codex/bg001-05-protocol-tool-gateway` | integrated | aa4ab3e | Function Calling, real MCP/A2A transports, governed versioned tools, and Tavily/Exa/scraper adapters complete. |
-| 06 | `codex/bg001-06-orchestration-runtime` | pending | | |
+| 06 | `codex/bg001-06-orchestration-runtime` | integrated | 0c2ba88 | Durable event-sourced task DAG, leases/recovery, HITL controls, hard scheduling budgets, and real thin-state LangGraph adapter complete. |
 | 07 | `codex/bg001-07-evidence-engine-verifier` | pending | | |
 | 08 | `codex/bg001-08-supervisor-worker-pool` | pending | | |
 | 09 | `codex/bg001-09-synthesis-writer-reviewer` | pending | | |
@@ -811,4 +811,50 @@ Remaining risks: The transitional draft graph invokes the governed research
   production entry point. Branch 06 owns durable orchestration and state
   thinning; branches 07-09 own evidence and role semantics; branch 15 removes
   the remaining draft paths. Cross-release policy promotion remains branch 11.
+```
+
+### Branch 06 execution record
+
+```text
+Branch: codex/bg001-06-orchestration-runtime
+Started from integration commit: da05c6d
+Scope delivered: Storage-neutral asynchronous Scheduler contract; transactional
+  append-only SQLite scheduler event journal and fully rebuildable run, task,
+  dependency, and lease projections; checksums, migrations, integrity audit,
+  online backup, restart and deterministic rebuild; atomic dependency,
+  priority, deadline, task-budget, actor-assignment, and global worker-slot
+  scheduling; complete create/split/merge/defer/prune/claim/heartbeat/complete/
+  fail/retry/cancel/edit transitions; worker lease fencing and crash recovery;
+  task/run pause, resume, cancellation, approval request/edit/approve/reject;
+  mutation fingerprint idempotency including empty claims; native event-sourced
+  scheduler and real AsyncSqliteSaver-backed LangGraph adapter under one
+  conformance suite; exact thin checkpoint with IDs, projection revision,
+  compact task/budget snapshot, artifact/error refs, and final-report artifact
+  ref. The reverse-order gate also exposed and fixed an AgentKernel race so
+  timed-out/cancelled actions terminate before independent verification.
+Boundary check: No claim/evidence/citation semantics, research decomposition,
+  model decision logic, artifact bodies, source content, report prose, role
+  business logic, evaluation, evolution, Studio capability, or RL work was
+  added. Existing graph/Console entry points remain transitional until branch
+  15; the kernel correction only stabilizes an already-required budget stop.
+Tests: 225 passed in normal order and 225 passed with test files in reverse
+  order before merge; 225 passed in both orders after integration; 11 focused
+  orchestration cases and 20 consecutive wall-time regression repetitions
+  passed. Only upstream websockets/uvicorn deprecation warnings remain.
+Failure/recovery tests: Cross-connection atomic claim and global-slot fencing,
+  mutation replay/conflicting reuse, stale and wrong-owner lease rejection,
+  restart recovery, exhausted attempts, deadline precedence, intermediate and
+  completion-time budget exhaustion, split/merge/defer/prune/cycle rejection,
+  approval approve/edit/reject, task/run pause/resume/cancel, terminal-run
+  protection, checksum corruption, projection deletion/rebuild, backup/restore,
+  event revision integrity, and missing-thick-state LangGraph checkpoints are
+  covered for native and LangGraph paths.
+Integration merge commit: 0c2ba88
+Remote push: feature commit de95102 and integration commits verified successful
+  to origin on 2026-07-24.
+Remaining risks: The draft production graph does not instantiate this scheduler
+  before branches 07-09 supply evidence and five-role consumers; branch 15 owns
+  entry-point migration and deletion of fat GraphState paths. Scheduler DAG and
+  budget events are not exposed in Studio V1; branch 12 owns their event-derived
+  Studio V2 projections. Evidence-domain scheduling policies remain branch 08.
 ```
