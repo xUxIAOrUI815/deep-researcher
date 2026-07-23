@@ -203,7 +203,12 @@ def test_evidence_and_claim_state_machines_reject_invalid_or_unbacked_states():
         source_quality=0.9,
         provenance=_provenance(),
     )
-    verified = evidence.transition(EvidenceStatus.VERIFIED)
+    with pytest.raises(ValidationError, match="verification identity"):
+        evidence.transition(EvidenceStatus.VERIFIED)
+    verified = evidence.transition(
+        EvidenceStatus.VERIFIED,
+        verification_id="verification_contracts",
+    )
     assert verified.status == EvidenceStatus.VERIFIED
     with pytest.raises(ValueError, match="invalid Evidence transition"):
         verified.transition(EvidenceStatus.PROPOSED)
