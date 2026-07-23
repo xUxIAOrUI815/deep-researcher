@@ -39,12 +39,12 @@ class TaskStatus(str, Enum):
 
 
 _ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.PENDING: frozenset({TaskStatus.READY, TaskStatus.DEFERRED, TaskStatus.CANCELLED, TaskStatus.PRUNED, TaskStatus.MERGED}),
-    TaskStatus.READY: frozenset({TaskStatus.RUNNING, TaskStatus.DEFERRED, TaskStatus.CANCELLED, TaskStatus.PRUNED, TaskStatus.MERGED}),
+    TaskStatus.PENDING: frozenset({TaskStatus.READY, TaskStatus.DEFERRED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PRUNED, TaskStatus.MERGED}),
+    TaskStatus.READY: frozenset({TaskStatus.RUNNING, TaskStatus.DEFERRED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PRUNED, TaskStatus.MERGED}),
     TaskStatus.RUNNING: frozenset({TaskStatus.PAUSED, TaskStatus.WAITING_APPROVAL, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}),
-    TaskStatus.PAUSED: frozenset({TaskStatus.READY, TaskStatus.CANCELLED}),
+    TaskStatus.PAUSED: frozenset({TaskStatus.READY, TaskStatus.CANCELLED, TaskStatus.PRUNED, TaskStatus.MERGED}),
     TaskStatus.WAITING_APPROVAL: frozenset({TaskStatus.READY, TaskStatus.CANCELLED, TaskStatus.FAILED}),
-    TaskStatus.DEFERRED: frozenset({TaskStatus.PENDING, TaskStatus.CANCELLED, TaskStatus.PRUNED}),
+    TaskStatus.DEFERRED: frozenset({TaskStatus.PENDING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PRUNED, TaskStatus.MERGED}),
     TaskStatus.FAILED: frozenset({TaskStatus.PENDING, TaskStatus.CANCELLED}),
     TaskStatus.COMPLETED: frozenset(),
     TaskStatus.CANCELLED: frozenset(),

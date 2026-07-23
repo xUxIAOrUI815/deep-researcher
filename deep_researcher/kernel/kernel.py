@@ -731,6 +731,10 @@ class AgentKernel:
                         task,
                         observation.model_dump(mode="json"),
                     )
+                    if observation.status == ObservationStatus.CANCELLED:
+                        return await finish(self._cancelled_stop(), error=observation.error)
+                    if observation.status == ObservationStatus.TIMEOUT:
+                        return await finish(self._wall_time_stop(budget), error=observation.error)
 
                     verification, verification_error, usage = await self._verify(
                         spec=spec,
@@ -794,11 +798,6 @@ class AgentKernel:
                                 summary=verification.summary[:1000],
                             )
                         )
-                    if observation.status == ObservationStatus.CANCELLED:
-                        return await finish(self._cancelled_stop(), error=observation.error)
-                    if observation.status == ObservationStatus.TIMEOUT:
-                        return await finish(self._wall_time_stop(budget), error=observation.error)
-
                     retryable = retryable or bool(observation.error and observation.error.retryable)
                     if observation.status != ObservationStatus.SUCCEEDED and retryable and action_attempt < max_attempts:
                         retry_stop = self._before_action_retry(budget, usage, state, token, command)
