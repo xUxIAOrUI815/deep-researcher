@@ -306,6 +306,82 @@ def test_dataset_registry_seals_all_splits_and_enforces_access(
         reopened.close()
 
 
+def test_dataset_registry_recovers_manifest_after_registry_commit_failure(
+    tmp_path,
+    artifact_store,
+    monkeypatch,
+):
+    runtime = build_evaluation_lab_runtime(
+        tmp_path / "lab-manifest-recovery",
+        artifact_store=artifact_store,
+    )
+    samples = _sample_artifacts(artifact_store, "manifest_recovery")
+    original_save = runtime.store.save_registered_dataset
+    original_put_json = artifact_store.put_json
+    calls = 0
+    manifest_artifacts = []
+
+    def fail_first_registry_commit(value, *, sample_fingerprints):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected registry commit interruption")
+        return original_save(
+            value,
+            sample_fingerprints=sample_fingerprints,
+        )
+
+    def record_manifest(value, **kwargs):
+        artifact = original_put_json(value, **kwargs)
+        if kwargs.get("kind") == ArtifactKind.DATASET_MANIFEST:
+            manifest_artifacts.append(artifact)
+        return artifact
+
+    monkeypatch.setattr(
+        runtime.store,
+        "save_registered_dataset",
+        fail_first_registry_commit,
+    )
+    monkeypatch.setattr(artifact_store, "put_json", record_manifest)
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="registry commit interruption",
+        ):
+            runtime.datasets.register(
+                name="manifest-recovery",
+                version="1.0.0",
+                sample_schema="RecoveryInput@1",
+                samples_by_split=samples,
+                description="Crash-window dataset.",
+            )
+
+        assert len(manifest_artifacts) == 1
+        assert runtime.store.find_dataset_bundle(
+            "manifest-recovery",
+            "1.0.0",
+        ) is None
+
+        recovered = runtime.datasets.register(
+            name="manifest-recovery",
+            version="1.0.0",
+            sample_schema="RecoveryInput@1",
+            samples_by_split=samples,
+            description="Crash-window dataset.",
+        )
+        assert calls == 2
+        assert (
+            recovered.bundle.manifest_artifact_id
+            == manifest_artifacts[0].artifact_id
+        )
+        assert runtime.datasets.registered(
+            recovered.bundle.bundle_id
+        ) == recovered
+        runtime.integrity_check()
+    finally:
+        runtime.close()
+
+
 def test_dataset_registry_rejects_cross_split_leakage_and_version_reuse(
     tmp_path,
     artifact_store,
