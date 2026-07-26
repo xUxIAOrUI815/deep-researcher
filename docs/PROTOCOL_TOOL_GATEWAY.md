@@ -71,19 +71,20 @@ the client does not assume ownership of local task state.
 
 ## Research adapters
 
-The former fake `MCPGateway` dispatcher has been removed. Tavily, Exa, and the
-configured scraper are ordinary `ToolAdapter` implementations registered as:
+The former fake `MCPGateway` dispatcher and its compatibility facade have been
+removed. The production Worker registry exposes:
 
-- `web.search.tavily@1.0.0`
-- `web.search.exa@1.0.0`
-- `web.scrape@1.0.0`
+- `research.search@1.0.0` (Tavily)
+- `research.search_fallback@1.0.0` (Exa)
+- `research.read@1.0.0` (SmartScraper)
+- `research.extract@1.0.0`
+- `research.compare@1.0.0`
+- `research.verify_source@1.0.0`
 
 Tavily requires `TAVILY_API_KEY`; Exa requires `EXA_API_KEY`. A missing key is a
-permanent configuration failure, never a production mock response. Offline test
-behavior remains explicit through `RESEARCHER_SEARCH_MODE=mock` and
-`SCRAPER_MODE=mock`. The default durable gateway database is
-`knowledge_data/tool_gateway.sqlite3` and can be overridden with
-`TOOL_GATEWAY_DB_PATH`.
+permanent configuration failure, never a production mock response. Offline
+tests inject adapters explicitly. The application owns the durable gateway
+database under its runtime directory.
 
 The Tavily definition may fall back to Exa only through the declared registry
 fallback chain. Provider authentication values are not placed in tool arguments,

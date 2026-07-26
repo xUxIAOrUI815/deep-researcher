@@ -3,9 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from deep_researcher.baseline import capture_current_mock_pipeline, fixture_fingerprint, load_frozen_replay_fixture, normalize_run_result
+from deep_researcher.baseline import fixture_fingerprint, load_committed_draft_baseline, load_frozen_replay_fixture, normalize_run_result
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -42,8 +40,7 @@ def test_baseline_normalization_ignores_identity_and_timestamps():
     assert normalize_run_result(result) == normalize_run_result(changed_identity)
 
 
-@pytest.mark.asyncio
-async def test_current_mock_pipeline_matches_committed_baseline():
+def test_committed_draft_baseline_remains_readable_without_draft_runtime():
     expected_path = REPOSITORY_ROOT / "docs" / "baselines" / "background001_current_draft.json"
     expected = json.loads(expected_path.read_text(encoding="utf-8"))
-    assert await capture_current_mock_pipeline() == expected
+    assert load_committed_draft_baseline() == expected

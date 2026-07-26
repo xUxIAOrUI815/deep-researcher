@@ -427,6 +427,21 @@ class SupervisorActionExecutor:
         started = self.clock()
         snapshot = await self.scheduler.snapshot(plan.run_id)
         existing_ids = set(snapshot.by_id)
+        root_constraints = snapshot.by_id[plan.root_task_id].envelope.constraints
+        inherited_runtime_constraints = {
+            key: root_constraints[key]
+            for key in (
+                "user_instructions",
+                "depth",
+                "report_id",
+                "required_section_id",
+                "report_section_ids",
+                "available_worker_tools",
+                "worker_tool_contracts",
+                "evidence_rules",
+            )
+            if key in root_constraints
+        }
         proposal_fingerprints = self._proposal_fingerprints(plan.tasks)
         proposed_task_ids = {
             key: _stable_id(
@@ -472,6 +487,7 @@ class SupervisorActionExecutor:
                     title=proposal.title,
                     goal=proposal.goal,
                     constraints={
+                        **inherited_runtime_constraints,
                         **proposal.constraints,
                         "supervisor_plan_id": plan.plan_id,
                         "proposal_key": proposal.proposal_key,

@@ -8,17 +8,12 @@ behavior, or report text. Tasks cross the boundary as versioned
 `TaskEnvelope` contracts and completed work is represented by result and
 artifact identifiers.
 
-The runtime has one storage-neutral asynchronous `Scheduler` contract and two
-conforming execution paths:
-
-- `NativeEventSourcedScheduler` performs scheduling directly against the
-  durable event journal and rebuildable task/DAG projection.
-- `LangGraphRuntimeAdapter` delegates every scheduler operation to the same
-  authoritative scheduler and mirrors only `ThinRuntimeState` through an
-  actual `AsyncSqliteSaver`.
-
-LangGraph is therefore a replaceable checkpoint adapter. It is not a task,
-evidence, artifact, or event database.
+The runtime has one storage-neutral asynchronous `Scheduler` contract.
+`NativeEventSourcedScheduler` is the production implementation and performs
+scheduling directly against the durable event journal and rebuildable task/DAG
+projection. ADR 0002 records why the provisional LangGraph adapter was removed
+after the native implementation passed recovery, concurrency, cancellation,
+approval, budget, and consistency gates.
 
 ## Durable model
 
@@ -115,22 +110,6 @@ task before resolving it. Approval records resolver, note, and time and requeues
 the task. Rejection records a supplied error reference and fails it. Task-level
 and run-level pause/resume/cancel operations are independent from approval.
 
-## Thin LangGraph checkpoint
-
-The checkpoint contains exactly one `orchestration_runtime` channel with:
-
-- run ID, run status, and projection revision;
-- active, ready, and waiting-approval task IDs;
-- aggregate budget usage and status counts;
-- output artifact IDs;
-- one error reference;
-- optional final-report artifact ID.
-
-It never contains task goals, constraints, task/result bodies, source content,
-evidence, report prose, or hidden reasoning. Scheduler events and projections
-remain authoritative if a checkpoint is missing or corrupt; rebuilding and
-synchronizing creates a fresh thin checkpoint.
-
 ## Failure and operating behavior
 
 - Projection checksum failure is surfaced as `SchedulerCorruption`; rebuilding
@@ -138,9 +117,8 @@ synchronizing creates a fresh thin checkpoint.
 - Event checksum or sequence corruption is not repaired silently.
 - Concurrent scheduler processes serialize claims in SQLite, so they cannot
   exceed global slots or lease one task twice.
-- A committed scheduler mutation remains replayable if later checkpoint
-  mirroring fails.
+- A committed scheduler mutation is replayable from its mutation identity and
+  append-only journal without a second checkpoint system.
 - Backup uses the SQLite online backup API after a full WAL checkpoint.
-- Existing draft graph entry points are intentionally not migrated here.
-  Branch 15 switches production entry points after the evidence and role
-  branches have supplied the remaining runtime consumers.
+- Production entry points use the native scheduler through the Background001
+  application composition root.

@@ -1,18 +1,31 @@
-# Artifact-backed Knowledge Storage
+# Artifact-backed knowledge runtime
 
-`deep_researcher.knowledge` separates the responsibilities previously concentrated in `core/session_knowledge.py`:
+`deep_researcher.knowledge` owns the durable evidence graph used by the
+production application:
 
-- `storage.py` and `sqlite_storage.py`: immutable identities, append-only revisions, typed relationships, natural keys, migrations, transactions, pagination, audits, backup and recovery.
-- `repository.py`: typed repositories for Source, SourceSnapshot, Passage, Evidence, AtomicFact, Claim, Citation, Conflict, Section, and Report.
-- `ingestion.py`: normalization of the current draft pipeline into artifact-backed candidate entities. It persists actual web bodies and never fabricates a fact-to-evidence edge when a source cannot be matched.
-- `normalization.py`: deterministic NFKC text and canonical HTTP(S) URLs.
-- `deduplication.py`: exact and lexical duplicate decisions with an optional vector similarity adapter.
-- `retrieval.py`: deterministic lexical retrieval with an optional vector ranking adapter. The vector adapter is an acceleration boundary, not a correctness dependency.
-- `projection.py`: a rebuildable compatibility projection; it does not read database tables directly.
-- `runtime.py`: owns both stores, repositories, ingestion/retrieval/projection services, integrity checks, and manifest-verified coordinated backups.
+- `storage.py` and `sqlite_storage.py` provide append-only revisions, typed
+  relationships, scoped natural keys, migrations, integrity checks, pagination,
+  backup, and recovery.
+- `repository.py` exposes typed repositories for Source, SourceSnapshot,
+  Passage, Evidence, AtomicFact, Claim, Citation, Conflict, Section, and Report.
+- `ingestion.py` converts governed research observations into artifact-backed
+  candidate entities and creates the report scaffold.
+- `normalization.py`, `deduplication.py`, and `retrieval.py` provide
+  deterministic normalization, run-scoped deduplication, and retrieval.
+- `runtime.py` owns the artifact store, knowledge store, repositories,
+  ingestion, retrieval, integrity checks, and coordinated backup.
 
-All entity IDs are namespaced by `run_id`, even when two runs ingest the same URL or upstream draft ID. Natural keys are also scoped by run. Relationships are type checked and cannot cross runs. Captured snapshots must reference a real ArtifactStore body whose run matches the entity provenance. Re-ingesting the same payload is revision-idempotent; changed source content creates a new immutable `SourceSnapshot.source_version`.
+Every entity ID and natural key is scoped by `run_id`. Relationships are
+type-checked and cannot cross runs. Source snapshots reference real immutable
+artifact bodies. Re-ingesting identical content is idempotent; changed content
+creates a new source version.
 
-Branch 02 uses controlled dual-write from the current graph so the frozen behavior remains unchanged while the new stores receive durable data. The legacy session store remains a transitional draft input path and is not authoritative. Later branches move planning, verification, writing, and orchestration to the new contracts; those behaviors intentionally do not live here.
+Research tools may write only candidate observations. The Evidence runtime
+independently verifies grounding and semantic support before claims become
+supported and before citations are generated. The Writer consumes verified
+repositories and evidence packets; it never reads a compatibility projection
+or legacy session state.
 
-Production entry points install the runtime through `run_research.py`. Tests and embedded callers may install `KnowledgeIngestionService` with `core.graph.set_durable_knowledge_ingestor` and must restore the prior value after the run.
+The production composition is
+`deep_researcher.application.ApplicationRuntime`. No dual-write, graph-state
+adapter, or legacy projection is supported.

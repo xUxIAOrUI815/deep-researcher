@@ -1,48 +1,74 @@
+from __future__ import annotations
+
+import argparse
 import asyncio
 import os
-import sys
-sys.path.insert(0, '.')
+from pathlib import Path
 
-from core.observability import get_observer, set_observer
-from core.graph import run_research_cycle, set_durable_knowledge_ingestor
-from deep_researcher.events import build_event_runtime
-from deep_researcher.knowledge import build_knowledge_runtime
+from dotenv import load_dotenv
+
+from deep_researcher.application import (
+    ResearchCreateRequest,
+    build_live_application_runtime,
+)
 
 
-async def main():
-    print("="*60)
-    print("Starting AIRE Research Cycle")
-    print("="*60)
-
-    previous_observer = get_observer()
-    runtime = build_event_runtime(os.getenv("EVENT_STORE_PATH", "event_data/research_events.sqlite3"))
-    knowledge_runtime = build_knowledge_runtime(
-        os.getenv("KNOWLEDGE_RUNTIME_PATH", "knowledge_v2_data")
+def _arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the durable Background001 research application."
     )
-    set_observer(runtime.observer)
-    previous_ingestor = set_durable_knowledge_ingestor(knowledge_runtime.ingestion)
+    parser.add_argument(
+        "query",
+        nargs="?",
+        default="Test research query",
+        help="Research question.",
+    )
+    parser.add_argument(
+        "--instructions",
+        default="",
+        help="Additional report and research constraints.",
+    )
+    parser.add_argument(
+        "--depth",
+        choices=("quick", "standard", "deep"),
+        default="standard",
+    )
+    parser.add_argument(
+        "--runtime-dir",
+        default=os.getenv("DEEP_RESEARCH_RUNTIME_DIR", ".research_runtime"),
+        help="Durable runtime directory.",
+    )
+    return parser.parse_args()
+
+
+async def main() -> int:
+    load_dotenv()
+    args = _arguments()
+    runtime = build_live_application_runtime(Path(args.runtime_dir))
     try:
-        result = await run_research_cycle("Test research query")
+        record = runtime.new_run(
+            ResearchCreateRequest(
+                query=args.query,
+                instructions=args.instructions,
+                depth=args.depth,
+            )
+        )
+        print(f"run_id={record.run_id}")
+        print(f"research_id={record.research_id}")
+        result = await runtime.execute(record.research_id)
+        print(f"status={result.status.value}")
+        print(f"stage={result.current_stage}")
+        if result.error_message:
+            print(f"error={result.error_message}")
+        if result.report_artifact_id:
+            markdown = runtime.artifact_store.read_bytes(
+                result.report_artifact_id
+            ).decode("utf-8")
+            print(markdown)
+        return 0 if result.status.value == "completed" else 1
     finally:
-        set_durable_knowledge_ingestor(previous_ingestor)
-        set_observer(previous_observer)
-        knowledge_runtime.close()
-        runtime.close()
-
-    print("\n" + "="*60)
-    print("Final State Summary:")
-    print("="*60)
-    print(f"Task Tree Size: {len(result.get('task_tree', {}))}")
-    print(f"Completed Tasks: {len(result.get('completed_tasks', []))}")
-    print(f"Atomic Facts: {len(result.get('atomic_facts', []))}")
-    print(f"Messages: {len(result.get('messages', []))}")
-
-    print("\n" + "="*60)
-    print("Token Usage Breakdown:")
-    print("="*60)
-    for key, value in result.get('token_usage', {}).items():
-        print(f"  {key}: {value}")
+        await runtime.aclose()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

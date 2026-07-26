@@ -1,4 +1,0 @@
-# providers
-
-## mcp_gateway
-

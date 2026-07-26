@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 from statistics import fmean
@@ -146,43 +145,20 @@ def normalize_run_result(result: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-async def capture_current_mock_pipeline() -> dict[str, Any]:
-    """Run the current draft graph against its frozen offline scenario."""
+def load_committed_draft_baseline(
+    path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Read the immutable pre-refactor measurement; never execute draft code."""
 
-    os.environ["RESEARCHER_SCRAPER_MODE"] = "mock"
-    os.environ["RESEARCHER_SEARCH_MODE"] = "mock"
-    fixture = load_frozen_replay_fixture()
-
-    import core.graph as graph_module
-    from core.context_builders import PlannerContextBuilder, ResearcherContextBuilder, WriterContextBuilder
-    from core.session_knowledge import KnowledgeManager
-    from core.session_retrieval import SessionRetrievalService
-    from tests.fixtures.offline_research_inputs import build_initial_graph_state
-
-    original = (
-        graph_module.SESSION_KNOWLEDGE_MANAGER,
-        graph_module.SESSION_RETRIEVAL_SERVICE,
-        graph_module.PLANNER_CONTEXT_BUILDER,
-        graph_module.RESEARCHER_CONTEXT_BUILDER,
-        graph_module.WRITER_CONTEXT_BUILDER,
+    baseline_path = (
+        Path(path)
+        if path is not None
+        else Path(__file__).resolve().parents[2]
+        / "docs"
+        / "baselines"
+        / "background001_current_draft.json"
     )
-    manager = KnowledgeManager(base_storage_path=".", sqlite_filename=":memory:")
-    retrieval = SessionRetrievalService(manager)
-    graph_module.SESSION_KNOWLEDGE_MANAGER = manager
-    graph_module.SESSION_RETRIEVAL_SERVICE = retrieval
-    graph_module.PLANNER_CONTEXT_BUILDER = PlannerContextBuilder(retrieval)
-    graph_module.RESEARCHER_CONTEXT_BUILDER = ResearcherContextBuilder(retrieval)
-    graph_module.WRITER_CONTEXT_BUILDER = WriterContextBuilder(retrieval)
-    try:
-        graph = graph_module.create_research_graph(None)
-        result = await graph.ainvoke(build_initial_graph_state(), fixture["run_config"])
-        return normalize_run_result(result)
-    finally:
-        (
-            graph_module.SESSION_KNOWLEDGE_MANAGER,
-            graph_module.SESSION_RETRIEVAL_SERVICE,
-            graph_module.PLANNER_CONTEXT_BUILDER,
-            graph_module.RESEARCHER_CONTEXT_BUILDER,
-            graph_module.WRITER_CONTEXT_BUILDER,
-        ) = original
-        manager.close()
+    payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != BASELINE_SCHEMA_VERSION:
+        raise ValueError("unsupported committed baseline schema version")
+    return payload
