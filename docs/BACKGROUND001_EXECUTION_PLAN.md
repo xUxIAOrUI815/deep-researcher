@@ -132,7 +132,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 11 | `codex/bg001-11-evaluation-semantic-gates` | integrated | b9ad3fa | Semantic metrics, calibrated blind judging, release gates, and immutable version promotion/rollback complete. |
 | 12 | `codex/bg001-12-studio-v2` | integrated | e363823 | Read-only paginated Task/Evidence graphs, event-rebuilt state diffs, recovery/resource/version views, snapshot navigation, and Studio UI complete. |
 | 13 | `codex/bg001-13-studio-v3-v4` | integrated | b537426 | Immutable AgentKernel replay/fork, fresh approvals, aligned A/B, component diff, badcase provenance, durable recovery, APIs and Studio V4 UI complete. |
-| 14 | `codex/bg001-14-offline-evolution` | pending | | |
+| 14 | `codex/bg001-14-offline-evolution` | feature complete | pending merge | Reviewed trace/badcase/evaluation pool, bounded structured patches, strict gated selection, rejected-edit memory, human release, best_skill and rollback complete. |
 | 15 | `codex/bg001-15-integration-hardening` | pending | | |
 
 ## 00 - Foundation contracts and baseline
@@ -1254,4 +1254,66 @@ Remaining risks: Branch 14 must consume scored traces, evaluations and these
   migration, removal of transitional draft paths, and complete stress/security
   hardening. Studio intentionally reports legacy runs without ReplayCapsule
   material as inspectable but ineligible instead of fabricating replay inputs.
+```
+
+### Branch 14 execution record
+
+```text
+Branch: codex/bg001-14-offline-evolution
+Started from integration commit: 13d6577
+Scope delivered: Framework-independent contracts for all eight optimization
+  targets and their allowed Skill/Prompt/Tool Policy/Stop Policy/Rubric
+  boundaries; immutable candidate-pool entries and separate human reviews for
+  scored success/failure traces, Studio badcases and evaluations; train/dev
+  split discovery and relabel/leakage rejection; sealed current-promoted-version
+  optimizer inputs with all required source categories; explicitly separated
+  runtime, cross-task-experience and formal Skill Registry memory layers; a
+  concrete deterministic network-free trace-signal optimizer; exact line-level
+  add/delete/replace patches with operation fingerprints, stale/ambiguous/
+  overlap rejection and per-round operation/line/character/text-learning-rate
+  budgets; immutable patch/content/candidate artifacts and parent-linked Version
+  Registry candidates; cross-campaign rejected-edit memory that excludes prior
+  operations from later generation; strict positive selection improvement over
+  the existing semantic/deterministic/cost/variance/safety/protocol gates;
+  explicit human approval/rejection; exact test plus hidden-test final
+  promotion; static versioned best_skill history; post-release keep/rollback;
+  and a checksummed WAL journal with atomic claims, restart recovery, cursor
+  pagination, rebuildable projections, immutable triggers, backup and audit.
+Boundary check: Pool submission and review set optimizer/publication triggers to
+  false, and no production trace or badcase can create a campaign or version
+  without explicit reviewed input, generation and release calls. Candidate
+  generation uses no runtime memory or online inference. Human decisions may
+  reject a candidate but cannot promote, supersede or roll back a version;
+  promotion remains owned by the existing final release gate. No production
+  entry-point migration, online code/weight/Skill mutation, model training,
+  compatibility layer, hidden chain-of-thought, RL framework or RL training was
+  added.
+Tests: 318 passed in normal order and 318 passed with test files in reverse
+  order on the feature branch. Sixteen Branch-14 scenarios cover all eight
+  target boundaries and dense end-to-end/durability paths; 32 combined
+  Evolution, semantic gate and advanced Studio cases passed after the final
+  recovery hardening. Python compilation, pyflakes on non-export modules and
+  git diff validation passed. Only upstream websockets/uvicorn deprecation
+  warnings remain.
+Failure/recovery tests: Production trace non-self-promotion, missing source
+  categories, unreviewed inputs, observed split relabel and hidden-test leakage,
+  non-strict selection, cost/safety final rejection, human rejection, round
+  exhaustion, stale base content/version, stale/overlapping edits, every text
+  budget, rejected-operation regeneration, malicious online/network generator
+  reporting, cross-connection atomic claims, worker restart/abandon/new attempt,
+  candidate-pool review artifact/store interruption, campaign input-seal
+  interruption, human-decision/Version-Registry/store interruption, release
+  transition replay, projection deletion/rebuild, projection corruption,
+  append-only trigger enforcement, cursor pagination, online backup/reopen,
+  promotion, post-release regression rollback and best_skill restoration are
+  covered.
+Integration merge commit: pending
+Remote push: pending
+Remaining risks: Branch 15 must compose this offline loop with the fully migrated
+  runtime entry points without adding online inference, remove all transitional
+  draft execution paths, and run the specified database-lock, artifact-size,
+  long-trace/report, redaction/security, replay-side-effect and dataset-access
+  stress suites. The built-in optimizer is deliberately deterministic and
+  network-free; a future offline model-backed generator must satisfy the same
+  OfflineGeneratorResult and isolation contract before it can be enabled.
 ```

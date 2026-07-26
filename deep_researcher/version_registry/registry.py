@@ -294,9 +294,25 @@ class VersionRegistry:
         )
         if decision_artifact is None:
             raise ValueError("version transition gate artifact is missing")
-        if decision_artifact.kind != ArtifactKind.RELEASE_GATE_DECISION:
+        if decision_artifact.kind not in {
+            ArtifactKind.RELEASE_GATE_DECISION,
+            ArtifactKind.EVOLUTION_HUMAN_DECISION,
+        }:
             raise ValueError(
-                "version transition requires a release-gate decision artifact"
+                "version transition requires a release-gate or governed "
+                "offline-evolution human-decision artifact"
+            )
+        if (
+            decision_artifact.kind
+            == ArtifactKind.EVOLUTION_HUMAN_DECISION
+            and (
+                record.state != VersionLifecycleState.CANDIDATE
+                or to_state != VersionLifecycleState.REJECTED
+            )
+        ):
+            raise ValueError(
+                "offline-evolution human decisions may reject candidates "
+                "but cannot promote, supersede, or roll back versions"
             )
         version_id = record.manifest.version_ref.version_id
         transition_id = _stable_id(
