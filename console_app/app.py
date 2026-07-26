@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from deep_researcher.application import (
     ApplicationRuntime,
+    ConsoleRunListItem,
     ResearchCreateRequest,
     RunApprovalRequest,
     RunCancellationRequest,
@@ -50,8 +51,35 @@ def create_app(
         finally:
             await service.aclose()
 
-    app = FastAPI(title="DeepResearcher Console", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(
+        title="DeepResearcher Console",
+        version="2.0.0",
+        lifespan=lifespan,
+    )
     app.state.console_service = service
+
+    @app.middleware("http")
+    async def console_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "font-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=()",
+        )
+        return response
 
     base_dir = Path(__file__).resolve().parent
     templates = Jinja2Templates(directory=str(base_dir / "templates"))
@@ -59,10 +87,10 @@ def create_app(
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"status": "ok"}
+        return service.system_status()
 
     @app.get("/api/runs")
-    async def list_runs() -> list[dict]:
+    async def list_runs() -> list[ConsoleRunListItem]:
         return await service.list_runs()
 
     @app.post("/api/runs")
@@ -646,7 +674,7 @@ def create_app(
     @app.get("/api/runs/{research_id}/console")
     async def get_console(research_id: str):
         try:
-            return await service.get_console_summary(research_id)
+            return await service.get_console_workspace(research_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="Run not found")
 
