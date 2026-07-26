@@ -14,8 +14,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
 
-from schemas.console import ResearchCreateRequest
-from deep_researcher.studio import TimelineQuery
+from schemas.console import (
+    ResearchCreateRequest,
+    StudioABComparisonRequest,
+    StudioBadcaseCreateRequest,
+    StudioReplayApprovalRequest,
+    StudioReplayCreateRequest,
+)
+from deep_researcher.studio import (
+    StudioAdvancedConflict,
+    TimelineQuery,
+)
 from .service import ResearchConsoleService
 
 load_dotenv()
@@ -312,6 +321,18 @@ def create_app(runtime_dir: str = ".console_runtime") -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Run not found") from exc
 
+    @app.get(
+        "/api/studio/advanced/runs/{run_id}/component-selection"
+    )
+    async def get_studio_component_selection(run_id: str):
+        try:
+            return service.get_studio_component_selection(run_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            ) from exc
+
     @app.get("/api/studio/v2/runs/{run_id}/metrics")
     async def get_studio_v2_metrics(run_id: str):
         try:
@@ -384,6 +405,203 @@ def create_app(runtime_dir: str = ".console_runtime") -> FastAPI:
             raise HTTPException(
                 status_code=404,
                 detail="Artifact not found",
+            ) from exc
+
+    @app.get(
+        "/api/studio/advanced/runs/{run_id}/spans/{span_id}/"
+        "replay-eligibility"
+    )
+    async def get_studio_replay_eligibility(
+        run_id: str,
+        span_id: str,
+    ):
+        try:
+            return service.get_studio_replay_eligibility(
+                run_id,
+                span_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=str(exc),
+            ) from exc
+
+    @app.post(
+        "/api/studio/advanced/runs/{run_id}/spans/{span_id}/replays",
+        status_code=201,
+    )
+    async def prepare_studio_replay(
+        run_id: str,
+        span_id: str,
+        payload: StudioReplayCreateRequest,
+    ):
+        try:
+            return service.prepare_studio_replay(
+                run_id=run_id,
+                span_id=span_id,
+                mode=payload.mode,
+                selected_component_versions=(
+                    payload.selected_component_versions
+                ),
+                requested_by=payload.requested_by,
+                reason=payload.reason,
+                restart_failed_span=payload.restart_failed_span,
+                environment_label=payload.environment_label,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/advanced/replays")
+    async def list_studio_replays(
+        statuses: str | None = None,
+        cursor: str | None = None,
+        limit: int = Query(default=100, ge=1, le=1000),
+    ):
+        try:
+            return service.list_studio_replays(
+                statuses=csv_values(statuses),
+                cursor=cursor,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/advanced/replays/{request_id}")
+    async def get_studio_replay(request_id: str):
+        try:
+            return service.get_studio_replay(request_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Replay request not found",
+            ) from exc
+
+    @app.post(
+        "/api/studio/advanced/replays/{request_id}/approvals",
+        status_code=201,
+    )
+    async def approve_studio_replay(
+        request_id: str,
+        payload: StudioReplayApprovalRequest,
+    ):
+        try:
+            return service.approve_studio_replay(
+                request_id=request_id,
+                command_fingerprint=payload.command_fingerprint,
+                approved_by=payload.approved_by,
+                reason=payload.reason,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except StudioAdvancedConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/studio/advanced/replays/{request_id}/execute"
+    )
+    async def execute_studio_replay(request_id: str):
+        try:
+            return await service.execute_studio_replay(request_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except StudioAdvancedConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/studio/advanced/comparisons",
+        status_code=201,
+    )
+    async def compare_studio_runs(
+        payload: StudioABComparisonRequest,
+    ):
+        try:
+            return service.compare_studio_runs(
+                left_run_id=payload.left_run_id,
+                right_run_id=payload.right_run_id,
+                dataset_sample_artifact_id=(
+                    payload.dataset_sample_artifact_id
+                ),
+                left_span_id=payload.left_span_id,
+                right_span_id=payload.right_span_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/studio/advanced/comparisons/{comparison_id}"
+    )
+    async def get_studio_comparison(comparison_id: str):
+        try:
+            return service.get_studio_comparison(comparison_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Comparison not found",
+            ) from exc
+
+    @app.get(
+        "/api/studio/advanced/component-diff/"
+        "{left_version_id}/{right_version_id}"
+    )
+    async def get_studio_component_diff(
+        left_version_id: str,
+        right_version_id: str,
+    ):
+        try:
+            return service.get_studio_component_diff(
+                left_version_id,
+                right_version_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/studio/advanced/badcases",
+        status_code=201,
+    )
+    async def create_studio_badcase(
+        payload: StudioBadcaseCreateRequest,
+    ):
+        try:
+            return service.create_studio_badcase(
+                source_run_id=payload.source_run_id,
+                source_span_id=payload.source_span_id,
+                dataset_sample_artifact_id=(
+                    payload.dataset_sample_artifact_id
+                ),
+                evaluation_ids=tuple(payload.evaluation_ids),
+                evaluation_artifact_ids=tuple(
+                    payload.evaluation_artifact_ids
+                ),
+                human_note=payload.human_note,
+                created_by=payload.created_by,
+                additional_input_artifact_ids=tuple(
+                    payload.additional_input_artifact_ids
+                ),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/advanced/badcases/{badcase_id}")
+    async def get_studio_badcase(badcase_id: str):
+        try:
+            return service.get_studio_badcase(badcase_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Badcase not found",
             ) from exc
 
     @app.get("/api/runs/{research_id}/console")

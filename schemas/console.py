@@ -28,6 +28,40 @@ class ResearchCreateResponse(BaseModel):
     model_config = {"strict": True}
 
 
+class StudioReplayCreateRequest(BaseModel):
+    mode: Literal["saved_tool_results", "live_environment"]
+    selected_component_versions: Dict[str, Any]
+    requested_by: str
+    reason: str
+    restart_failed_span: bool = False
+    environment_label: Optional[str] = None
+
+
+class StudioReplayApprovalRequest(BaseModel):
+    command_fingerprint: str
+    approved_by: str
+    reason: str
+
+
+class StudioABComparisonRequest(BaseModel):
+    left_run_id: str
+    right_run_id: str
+    dataset_sample_artifact_id: str
+    left_span_id: Optional[str] = None
+    right_span_id: Optional[str] = None
+
+
+class StudioBadcaseCreateRequest(BaseModel):
+    source_run_id: str
+    source_span_id: str
+    dataset_sample_artifact_id: str
+    evaluation_ids: List[str]
+    evaluation_artifact_ids: List[str]
+    human_note: str
+    created_by: str
+    additional_input_artifact_ids: List[str] = Field(default_factory=list)
+
+
 class TimelineEventSummary(BaseModel):
     """控制台时间线中的单条事件摘要。"""
 

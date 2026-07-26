@@ -14,11 +14,17 @@ from core.run_context import RunContext
 from core.session_knowledge import KnowledgeManager
 from core.session_retrieval import SessionRetrievalService
 from deep_researcher.artifacts import SQLiteArtifactStore
-from deep_researcher.events import EventRecorder, PersistentEventObserver, SQLiteEventStore
+from deep_researcher.contracts import ComponentVersionSet
+from deep_researcher.events import EventQuery, EventRecorder, PersistentEventObserver, SQLiteEventStore
 from deep_researcher.knowledge import KnowledgeRepository, SQLiteKnowledgeStorage
 from deep_researcher.orchestration import SQLiteSchedulerStore
 from deep_researcher.studio import (
     SQLiteStudioProjectionStore,
+    SQLiteStudioAdvancedStore,
+    KernelReplayBackend,
+    ReplayMode,
+    ReplayRequestStatus,
+    StudioAdvancedService,
     StudioProjectionExporter,
     StudioProjector,
     StudioV2Service,
@@ -89,6 +95,9 @@ class ResearchConsoleService:
         self.bg001_version_store = SQLiteVersionRegistryStore(
             self.runtime_dir / "bg001_version_registry.sqlite3"
         )
+        self.studio_advanced_store = SQLiteStudioAdvancedStore(
+            self.runtime_dir / "studio_advanced.sqlite3"
+        )
         self.studio_v2 = StudioV2Service(
             event_store=self.event_store,
             scheduler_store=self.bg001_scheduler_store,
@@ -100,6 +109,19 @@ class ResearchConsoleService:
         )
         self.event_recorder = EventRecorder(
             self.event_store, (StudioProjectionExporter(self.studio_store),)
+        )
+        self.studio_advanced = StudioAdvancedService(
+            store=self.studio_advanced_store,
+            event_store=self.event_store,
+            artifact_store=self.bg001_artifact_store,
+            version_store=self.bg001_version_store,
+            studio_v2=self.studio_v2,
+            replay_backend=KernelReplayBackend(
+                event_store=self.event_store,
+                recorder=self.event_recorder,
+                artifact_store=self.bg001_artifact_store,
+                version_store=self.bg001_version_store,
+            ),
         )
         self.observer = PersistentEventObserver(self.event_recorder)
         self._previous_observer = get_observer()
@@ -164,6 +186,7 @@ class ResearchConsoleService:
         if get_observer() is self.observer:
             set_observer(self._previous_observer)
         self.bg001_version_store.close()
+        self.studio_advanced_store.close()
         self.bg001_scheduler_store.close()
         self.bg001_knowledge_storage.close()
         self.bg001_artifact_store.close()
@@ -435,6 +458,140 @@ class ResearchConsoleService:
 
     def get_studio_v2_metrics(self, run_id: str) -> dict[str, Any]:
         return self.studio_v2.metrics(run_id).model_dump(mode="json")
+
+    def get_studio_component_selection(
+        self,
+        run_id: str,
+    ) -> dict[str, Any]:
+        page = self.event_store.list(EventQuery(run_id, limit=1))
+        if not page.items:
+            raise KeyError(run_id)
+        return page.items[0].component_versions.model_dump(mode="json")
+
+    def get_studio_replay_eligibility(
+        self,
+        run_id: str,
+        span_id: str,
+    ) -> dict[str, Any]:
+        return self.studio_advanced.replay_eligibility(run_id, span_id)
+
+    def prepare_studio_replay(
+        self,
+        *,
+        run_id: str,
+        span_id: str,
+        mode: str,
+        selected_component_versions: dict[str, Any],
+        requested_by: str,
+        reason: str,
+        restart_failed_span: bool,
+        environment_label: str | None,
+    ) -> dict[str, Any]:
+        record = self.studio_advanced.prepare_replay(
+            source_run_id=run_id,
+            source_span_id=span_id,
+            mode=ReplayMode(mode),
+            selected_component_versions=(
+                ComponentVersionSet.model_validate(
+                    selected_component_versions,
+                    strict=False,
+                )
+            ),
+            requested_by=requested_by,
+            reason=reason,
+            restart_failed_span=restart_failed_span,
+            environment_label=environment_label,
+        )
+        return record.model_dump(mode="json")
+
+    def list_studio_replays(
+        self,
+        *,
+        statuses: tuple[str, ...] = (),
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        page = self.studio_advanced_store.list(
+            statuses=tuple(ReplayRequestStatus(item) for item in statuses),
+            cursor=cursor,
+            limit=limit,
+        )
+        return page.model_dump(mode="json")
+
+    def get_studio_replay(self, request_id: str) -> dict[str, Any]:
+        record = self.studio_advanced_store.get(request_id)
+        if record is None:
+            raise KeyError(request_id)
+        return record.model_dump(mode="json")
+
+    def approve_studio_replay(
+        self,
+        *,
+        request_id: str,
+        command_fingerprint: str,
+        approved_by: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        return self.studio_advanced.approve_replay(
+            replay_request_id=request_id,
+            command_fingerprint=command_fingerprint,
+            approved_by=approved_by,
+            reason=reason,
+        ).model_dump(mode="json")
+
+    async def execute_studio_replay(
+        self,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return (
+            await self.studio_advanced.execute_replay(request_id)
+        ).model_dump(mode="json")
+
+    def compare_studio_runs(
+        self,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self.studio_advanced.compare_runs(
+            **kwargs
+        ).model_dump(mode="json")
+
+    def get_studio_comparison(
+        self,
+        comparison_id: str,
+    ) -> dict[str, Any]:
+        comparison = self.studio_advanced_store.comparison(
+            comparison_id
+        )
+        if comparison is None:
+            raise KeyError(comparison_id)
+        return comparison.model_dump(mode="json")
+
+    def get_studio_component_diff(
+        self,
+        left_version_id: str,
+        right_version_id: str,
+    ) -> dict[str, Any]:
+        return self.studio_advanced.component_diff(
+            left_version_id,
+            right_version_id,
+        ).model_dump(mode="json")
+
+    def create_studio_badcase(
+        self,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self.studio_advanced.create_badcase(
+            **kwargs
+        ).model_dump(mode="json")
+
+    def get_studio_badcase(
+        self,
+        badcase_id: str,
+    ) -> dict[str, Any]:
+        badcase = self.studio_advanced_store.badcase(badcase_id)
+        if badcase is None:
+            raise KeyError(badcase_id)
+        return badcase.model_dump(mode="json")
 
     async def list_runs(self) -> List[Dict[str, Any]]:
         rows = self.knowledge_manager.store.conn.execute(
