@@ -126,7 +126,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 05 | `codex/bg001-05-protocol-tool-gateway` | integrated | aa4ab3e | Function Calling, real MCP/A2A transports, governed versioned tools, and Tavily/Exa/scraper adapters complete. |
 | 06 | `codex/bg001-06-orchestration-runtime` | integrated | 0c2ba88 | Durable event-sourced task DAG, leases/recovery, HITL controls, hard scheduling budgets, and real thin-state LangGraph adapter complete. |
 | 07 | `codex/bg001-07-evidence-engine-verifier` | integrated | e9880da | Complete evidence graph, independent verification, six claim states, conflicts, coverage, bounded repair, and verified-only read boundary complete. |
-| 08 | `codex/bg001-08-supervisor-worker-pool` | pending | | |
+| 08 | `codex/bg001-08-supervisor-worker-pool` | integrated | 2b54206 | Dynamic Supervisor planning, governed Worker Pool, durable dedup/merge/recovery, and semantic convergence complete. |
 | 09 | `codex/bg001-09-synthesis-writer-reviewer` | pending | | |
 | 10 | `codex/bg001-10-evaluation-lab-core` | pending | | |
 | 11 | `codex/bg001-11-evaluation-semantic-gates` | pending | | |
@@ -908,4 +908,65 @@ Remaining risks: Branch 08 must make Supervisor/Worker convergence consume
   feedback through the durable scheduler. Branch 09 must enforce the verified
   read boundary in Writer/Reviewer role loops. Production entry points remain
   on the transitional draft graph until branch 15, as planned.
+```
+
+### Branch 08 execution record
+
+```text
+Branch: codex/bg001-08-supervisor-worker-pool
+Started from integration commit: 4b237f4
+Scope delivered: Model-driven Research Supervisor AgentSpec with bounded
+  structured-output repair and authoritative early-stop rejection; complete
+  research-only SupervisorPlan/TaskProposal contracts with constraints,
+  artifacts, schemas, all budgets, priority, deadline, attempts, worker
+  assignment and dependency-cycle validation; dependency-semantic task
+  fingerprinting and crash-safe immutable plan application to the scheduler
+  DAG; shared-AgentKernel Worker AgentSpec for governed search/read/extract/
+  delegate/compare/verify-source commands; configured-pool assignment fencing;
+  WAL/checksummed coordination storage for leased query/source deduplication,
+  semantic task reservations, novelty, Worker attempts, merges and convergence
+  decisions; canonical source/query handling; independent information-gain
+  verification; scheduler-controlled pool concurrency; immutable observation,
+  Worker, delegation, merge and convergence artifacts; real ProtocolToolGateway
+  retry/fallback integration; cross-store Worker-result reconciliation after a
+  process crash; retry, cancellation and resumable HITL approval paths; dynamic
+  convergence-driven replanning; and bounded convergence over required section
+  and citation coverage, high-impact blockers, high/critical conflicts, failed
+  or pending work, repeated low gain, all aggregate budgets, maximum cycles,
+  cancellation and approval. Command normalization also received a one-line
+  deterministic proposed-at correction after the full gate exposed a pre-existing
+  timestamp race.
+Boundary check: Workers cannot synthesize or review final reports and execute
+  providers only through the injected governed command boundary. The Supervisor
+  has no tool grants/provider access and emits only structured delegation,
+  approval or stop commands. No free-form agent chat, Writer/Reviewer behavior,
+  evaluation/release gate, Studio feature, offline optimization, online
+  self-modification, compatibility layer, or RL work was added. Production
+  entry points remain transitional until branch 15.
+Tests: 256 passed in normal order and 256 passed with test files in reverse
+  order on the feature branch; 256 passed in both orders after the no-ff
+  integration merge. Sixteen branch-specific cases cover role and assignment
+  boundaries, schema repair, cyclic/early-stop rejection, dynamic dependency
+  DAGs, semantic task/query/source deduplication, every Worker command,
+  structured delegation, bounded concurrency, information gain, real gateway
+  fallback, cross-worker merge, dynamic replanning, semantic blockers, approval
+  and resume, retry, cancellation, run budgets, low gain, restart and end-to-end
+  convergence. Only upstream websockets/uvicorn deprecation warnings remain.
+Failure/recovery tests: Concurrent cross-connection claims, checksum corruption,
+  online backup/reopen, identity conflict, immutable plan replay, simulated
+  crash after plan artifact but before DAG split, simulated crash after Worker
+  intent but before scheduler commit, idempotent merge/decision replay, task
+  retry, pending approval and post-approval resume, primary-provider failure
+  with governed fallback, runnable-work bounded-round protection, pool
+  concurrency fencing, low-gain/max-cycle/budget/cancellation stops, severe
+  conflict/high-impact blocking, complete-run restart, and test-order
+  independence are covered.
+Integration merge commit: 2b54206
+Remote push: feature commit b71ba68 pushed successfully; integration push is
+  recorded by the immediately following plan commit on 2026-07-26.
+Remaining risks: Branch 09 must consume the verified-only evidence view and
+  these research convergence outputs in the Writer/Reviewer report loop.
+  Branches 10-14 still own evaluation, release gates, advanced Studio, and
+  offline evolution. Branch 15 still owns production entry-point migration and
+  removal of the transitional draft graph.
 ```
