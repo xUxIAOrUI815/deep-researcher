@@ -131,7 +131,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 10 | `codex/bg001-10-evaluation-lab-core` | integrated | b5834e9 | Five-split datasets, Frozen/Live modes, deterministic/trace metrics, and reproducible baseline experiments complete. |
 | 11 | `codex/bg001-11-evaluation-semantic-gates` | integrated | b9ad3fa | Semantic metrics, calibrated blind judging, release gates, and immutable version promotion/rollback complete. |
 | 12 | `codex/bg001-12-studio-v2` | integrated | e363823 | Read-only paginated Task/Evidence graphs, event-rebuilt state diffs, recovery/resource/version views, snapshot navigation, and Studio UI complete. |
-| 13 | `codex/bg001-13-studio-v3-v4` | feature complete | pending merge | Immutable AgentKernel replay/fork, fresh approvals, aligned A/B, component diff, badcase provenance, durable recovery, APIs and Studio V4 UI complete. |
+| 13 | `codex/bg001-13-studio-v3-v4` | integrated | b537426 | Immutable AgentKernel replay/fork, fresh approvals, aligned A/B, component diff, badcase provenance, durable recovery, APIs and Studio V4 UI complete. |
 | 14 | `codex/bg001-14-offline-evolution` | pending | | |
 | 15 | `codex/bg001-15-integration-hardening` | pending | | |
 
@@ -1226,13 +1226,15 @@ Boundary check: Source events and artifacts are never rewritten; every replay
   point migration, compatibility layer, RL work, or hidden chain-of-thought
   exposure was added.
 Tests: 302 passed in normal order and 302 passed with test files in reverse
-  order on the feature branch. Eighty-one combined Studio, evaluation, event,
-  artifact, scheduler and Tool Gateway cases passed in both orders. Five dense
-  Branch-13 scenarios cover saved/live/dynamic-approval execution, durability,
-  A/B/diff/badcase boundaries and HTTP/UI surfaces. Python compilation,
-  desktop browser interaction, root-span error feedback, console-log audit and
-  375px responsive visual/layout inspection passed. Only upstream
-  websockets/uvicorn deprecation warnings remain.
+  order on the feature branch, then both full-suite orders passed again after
+  the no-ff integration merge. Eighty-one combined Studio, evaluation, event,
+  artifact, scheduler and Tool Gateway cases passed in both orders on the
+  feature and integration branches. Five dense Branch-13 scenarios cover
+  saved/live/dynamic-approval execution, durability, A/B/diff/badcase
+  boundaries and HTTP/UI surfaces. Python compilation, desktop browser
+  interaction, root-span error feedback, console-log audit and 375px
+  responsive visual/layout inspection passed. Only upstream websockets/uvicorn
+  deprecation warnings remain.
 Failure/recovery tests: Missing/stale replay capsules, nonterminal and root run
   spans, exact subtree fingerprinting, source-run immutability, failed-span
   gating, sealed model/version mismatch, missing preflight approval, newly
@@ -1243,8 +1245,9 @@ Failure/recovery tests: Missing/stale replay capsules, nonterminal and root run
   backup/reopen, aligned and deliberately misaligned dataset samples,
   evaluation-ID mismatch, unsupported component diff and immutable HTTP
   mutation rejection are covered.
-Integration merge commit: pending
-Remote push: pending
+Integration merge commit: b537426
+Remote push: feature commit 5083691 pushed successfully; integration push is
+  recorded by this plan commit on 2026-07-26.
 Remaining risks: Branch 14 must consume scored traces, evaluations and these
   inert badcases to generate bounded offline candidate patches and pass strict
   selection/release gates. Branch 15 still owns production entry-point
