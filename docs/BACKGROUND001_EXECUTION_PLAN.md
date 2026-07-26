@@ -135,7 +135,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 13 | `codex/bg001-13-studio-v3-v4` | integrated | b537426 | Immutable AgentKernel replay/fork, fresh approvals, aligned A/B, component diff, badcase provenance, durable recovery, APIs and Studio V4 UI complete. |
 | 14 | `codex/bg001-14-offline-evolution` | integrated | 80dbde8 | Reviewed trace/badcase/evaluation pool, bounded structured patches, strict gated selection, rejected-edit memory, human release, best_skill and rollback complete. |
 | 15 | `codex/bg001-15-integration-hardening` | integrated | c241efc | Production composition, draft removal, native-scheduler ADR, full recovery/security/stress gates, and capability-boundary documentation complete. |
-| 16 | `codex/bg001-16-console-runtime-alignment` | complete; integration pending | pending | Complete root Console projection, operational workspace, report lifecycle, actions, accessibility, and browser/API contract alignment. |
+| 16 | `codex/bg001-16-console-runtime-alignment` | integrated | 1d9c3f4 | Complete root Console projection, operational workspace, report lifecycle, actions, accessibility, and browser/API contract alignment. |
 
 ## 00 - Foundation contracts and baseline
 
@@ -1448,11 +1448,12 @@ Boundary check: No Supervisor planning, Worker search/extraction, Evidence
   contains no draft-response compatibility facade, duplicates no advanced
   Studio mutation workflow, and exposes no hidden reasoning.
 Tests: 259 passed in normal order and 259 passed with test files in reverse
-  order; 26 focused Console/Application/Studio cases passed; JavaScript syntax
-  validation and Python compilation passed. Safe Markdown, external/internal
-  URL policy, schema normalization, polling, filtering, namespaced actor
-  identity, accessibility, reduced-motion, responsive breakpoints and print
-  contracts are covered.
+  order on the feature branch, then both 259-test orders passed again after
+  the no-ff integration merge; 26 focused Console/Application/Studio cases
+  passed; JavaScript syntax validation and Python compilation passed. Safe
+  Markdown, external/internal URL policy, schema normalization, polling,
+  filtering, namespaced actor identity, accessibility, reduced-motion,
+  responsive breakpoints and print contracts are covered.
 Failure/recovery tests: Browser checks covered provider-not-configured landing,
   a retained/redacted failed live run, completed deterministic run, task,
   evidence, report and filtered error timeline views, approval pause/resume
@@ -1463,8 +1464,9 @@ Failure/recovery tests: Browser checks covered provider-not-configured landing,
   cancellation, failure redaction, terminal action fencing, security headers
   and exact Console/Report/Studio links. Polling preserves the last good
   projection and exposes bounded retry after request failure.
-Integration merge commit: pending
-Remote push: pending
+Integration merge commit: 1d9c3f4
+Remote push: feature commit a88229a pushed successfully; integration push is
+  recorded by this plan commit on 2026-07-26.
 Remaining risks: Live research still requires configured model and search
   provider credentials; the Console reports that boundary instead of
   fabricating results. The two suite warnings are upstream websocket API
