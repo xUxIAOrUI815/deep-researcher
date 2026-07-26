@@ -174,6 +174,21 @@ class DeterministicEvaluatorSuite:
             for claim_id in section.unsupported_claim_ids
         }
         covered_claim_ids = supported_claim_ids - unsupported_claim_ids
+        used_citations = [
+            item for item in citations if item.used_in_report
+        ]
+        positioned_citations = sum(
+            1
+            for item in used_citations
+            if (
+                item.marker is not None
+                and snapshot.report_markdown.count(item.marker) == 1
+                and snapshot.report_markdown.find(item.marker) > 0
+                and not snapshot.report_markdown[
+                    snapshot.report_markdown.find(item.marker) - 1
+                ].isspace()
+            )
+        )
         reference_time = snapshot.created_at
         fresh_sources = sum(
             1
@@ -246,6 +261,12 @@ class DeterministicEvaluatorSuite:
                 ),
                 MetricDirection.HIGHER_IS_BETTER,
                 "citation_completeness_v1",
+            ),
+            (
+                "citation_position_validity_rate",
+                _ratio(positioned_citations, len(used_citations)),
+                MetricDirection.HIGHER_IS_BETTER,
+                "citation_position_v1",
             ),
             (
                 "schema_validity_rate",

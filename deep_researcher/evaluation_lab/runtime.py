@@ -11,6 +11,7 @@ from deep_researcher.reporting import SQLiteReportingStore
 from .datasets import DatasetRegistry
 from .evaluators import DeterministicEvaluatorSuite
 from .experiments import ExperimentRegistry
+from .judges import JudgeCalibrator
 from .modes import (
     FrozenReplayRunner,
     LiveWebExecutor,
@@ -19,6 +20,9 @@ from .modes import (
 )
 from .snapshot import EvaluationSnapshotBuilder
 from .store import SQLiteEvaluationStore
+from .semantic import SemanticEvaluationEngine
+from .gates import ReleaseGateService
+from deep_researcher.version_registry import VersionRegistry
 
 
 @dataclass
@@ -28,6 +32,9 @@ class EvaluationLabRuntime:
     datasets: DatasetRegistry
     evaluator: DeterministicEvaluatorSuite
     experiments: ExperimentRegistry
+    semantic: SemanticEvaluationEngine
+    calibrator: JudgeCalibrator
+    release_gates: ReleaseGateService | None = None
     snapshots: EvaluationSnapshotBuilder | None = None
 
     def frozen_replay(self, executor: ReplayExecutor) -> FrozenReplayRunner:
@@ -67,6 +74,7 @@ def build_evaluation_lab_runtime(
     evidence: EvidenceRuntime | None = None,
     reporting_store: SQLiteReportingStore | None = None,
     event_store: EventStore | None = None,
+    version_registry: VersionRegistry | None = None,
     freshness_days: int = 730,
 ) -> EvaluationLabRuntime:
     if artifact_store is None:
@@ -92,6 +100,24 @@ def build_evaluation_lab_runtime(
         store=store,
         artifact_store=artifact_store,
     )
+    semantic = SemanticEvaluationEngine(
+        artifact_store=artifact_store,
+        store=store,
+        deterministic_evaluator=evaluator,
+    )
+    calibrator = JudgeCalibrator(
+        artifact_store=artifact_store,
+        store=store,
+    )
+    release_gates = (
+        ReleaseGateService(
+            store=store,
+            artifact_store=artifact_store,
+            version_registry=version_registry,
+        )
+        if version_registry is not None
+        else None
+    )
     snapshots = (
         EvaluationSnapshotBuilder(
             evidence=evidence,
@@ -107,6 +133,9 @@ def build_evaluation_lab_runtime(
         datasets=datasets,
         evaluator=evaluator,
         experiments=experiments,
+        semantic=semantic,
+        calibrator=calibrator,
+        release_gates=release_gates,
         snapshots=snapshots,
     )
     runtime.integrity_check()
