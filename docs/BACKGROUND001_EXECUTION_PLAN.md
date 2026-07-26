@@ -128,7 +128,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 07 | `codex/bg001-07-evidence-engine-verifier` | integrated | e9880da | Complete evidence graph, independent verification, six claim states, conflicts, coverage, bounded repair, and verified-only read boundary complete. |
 | 08 | `codex/bg001-08-supervisor-worker-pool` | integrated | 2b54206 | Dynamic Supervisor planning, governed Worker Pool, durable dedup/merge/recovery, and semantic convergence complete. |
 | 09 | `codex/bg001-09-synthesis-writer-reviewer` | integrated | 5838f81 | Verified-only Writer, deterministic full-rubric Reviewer, bounded report repairs, and durable revisions/citation maps complete. |
-| 10 | `codex/bg001-10-evaluation-lab-core` | pending | | |
+| 10 | `codex/bg001-10-evaluation-lab-core` | integrated | b5834e9 | Five-split datasets, Frozen/Live modes, deterministic/trace metrics, and reproducible baseline experiments complete. |
 | 11 | `codex/bg001-11-evaluation-semantic-gates` | pending | | |
 | 12 | `codex/bg001-12-studio-v2` | pending | | |
 | 13 | `codex/bg001-13-studio-v3-v4` | pending | | |
@@ -1030,4 +1030,57 @@ Remaining risks: Branches 10-11 must turn persisted reports, citations, reviews,
   scheduler lifecycle with report-time targeted research, switch production
   entry points to this runtime, exercise long-report stress, and remove the
   transitional draft Writer/graph paths.
+```
+
+### Branch 10 execution record
+
+```text
+Branch: codex/bg001-10-evaluation-lab-core
+Started from integration commit: bc3358d
+Scope delivered: Checksummed WAL Evaluation Lab registry and immutable result
+  journal with online backup, integrity verification and concurrent connection
+  safety; sealed versioned train/dev/selection/test/hidden-test Dataset Bundles
+  with content-hash leakage prevention, lineage, deterministic manifests,
+  purpose/actor/sample authorization, immutable access audits and crash/retry
+  reconstruction; durable Evidence/Report/Event projection into complete
+  evaluation snapshots; fixed-version non-LLM evaluators for URL validity and
+  uniqueness, citation relationship and quote grounding, citation completeness,
+  schema and section coverage, source type/authority/freshness/publisher/domain
+  diversity/primary share, token/cost/latency, failure/recovery/idempotency/
+  protocol compliance, evidence per tool call, redundant search, trace recovery,
+  convergence turns, invalid tool calls and budget violations; network-forbidden
+  repeated Frozen Replay with canonical expected-output/event and repeat-metric
+  determinism checks; authorized repeated Live Web runs with per-metric mean and
+  population variance plus source content, identity, addition and disappearance
+  reporting; immutable Experiment definitions/runs/comparisons with subject,
+  component, environment, dependency/configuration fingerprint, input and result
+  artifact provenance and aligned legacy/fixed-workflow/new-runtime conditions;
+  and complete metric/access/recovery documentation.
+Boundary check: No LLM or semantic judge, judge calibration, release gate,
+  Version Registry promotion/rejection/rollback, Skill/Prompt/Policy patches,
+  candidate generation, online self-modification, test/hidden-test tuning, UI,
+  production entry-point migration, compatibility layer, or RL work was added.
+Tests: 282 passed in normal order and 282 passed with test files in reverse
+  order on the feature branch and after the final no-ff integration merge.
+  Eleven branch-specific cases and 79 combined contract,
+  artifact, event, evidence, reporting and evaluation cases passed. Only
+  upstream websockets/uvicorn deprecation warnings remain.
+Failure/recovery tests: Cross-split relabel leakage, immutable version reuse,
+  every split-purpose denial, wrong Live Web subject/sample authorization,
+  same-request concurrent access, cross-connection concurrent registration,
+  restart restoration, interrupted manifest reconstruction, missing artifacts,
+  fixture fingerprint mismatch, attempted Frozen Replay network access,
+  reproducible and deliberately divergent replay outputs, Live source mutation
+  and set drift, metric variance, misaligned/failed baseline protection,
+  immutable record conflict, online backup/reopen, direct checksum corruption,
+  and end-to-end verified report projection are covered.
+Integration merge commit: b5834e9
+Remote push: feature commits ff1d2d3 and 5bb3c47 pushed successfully;
+  integration push is recorded by this plan commit on 2026-07-26.
+Remaining risks: Branch 11 must add semantic metrics, blind calibrated
+  multi-judge evaluation, release policies and immutable Version Registry
+  promotion/rollback. Branches 12-13 own Evaluation/Experiment Studio views and
+  replay/A-B/badcase interaction. Branch 14 owns offline patch generation and
+  selection. Branch 15 owns production entry-point migration and stress
+  hardening; this branch intentionally does not make release decisions.
 ```
