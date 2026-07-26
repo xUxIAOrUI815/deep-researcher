@@ -130,7 +130,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 09 | `codex/bg001-09-synthesis-writer-reviewer` | integrated | 5838f81 | Verified-only Writer, deterministic full-rubric Reviewer, bounded report repairs, and durable revisions/citation maps complete. |
 | 10 | `codex/bg001-10-evaluation-lab-core` | integrated | b5834e9 | Five-split datasets, Frozen/Live modes, deterministic/trace metrics, and reproducible baseline experiments complete. |
 | 11 | `codex/bg001-11-evaluation-semantic-gates` | integrated | b9ad3fa | Semantic metrics, calibrated blind judging, release gates, and immutable version promotion/rollback complete. |
-| 12 | `codex/bg001-12-studio-v2` | pending | | |
+| 12 | `codex/bg001-12-studio-v2` | integrated | e363823 | Read-only paginated Task/Evidence graphs, event-rebuilt state diffs, recovery/resource/version views, snapshot navigation, and Studio UI complete. |
 | 13 | `codex/bg001-13-studio-v3-v4` | pending | | |
 | 14 | `codex/bg001-14-offline-evolution` | pending | | |
 | 15 | `codex/bg001-15-integration-hardening` | pending | | |
@@ -1140,4 +1140,57 @@ Remaining risks: Branch 12 must expose task/evidence/state-diff/error/budget
   over these evaluations and versions. Branch 14 owns offline structured patch
   generation and strict selection using these gates. Branch 15 owns production
   entry-point migration, stress/security hardening and complete composition.
+```
+
+### Branch 12 execution record
+
+```text
+Branch: codex/bg001-12-studio-v2
+Started from integration commit: 4dd09f4
+Scope delivered: Typed read-only Studio V2 service over public EventStore,
+  scheduler, knowledge, artifact and Version Registry APIs; truly paginated
+  scheduler task/event queries; incrementally queryable Task DAG with
+  split/merge/prune-as-skip/fail/retry/dependency history and cross-page
+  frontiers; paginated Source/Snapshot/Passage/Evidence/Fact/Claim/Citation/
+  Conflict/Section/Report graph with complete typed edges, conflict navigation
+  and governed source-snapshot content; structured evidence-domain before/after
+  status events; deterministic event replay for task, run, budget, evidence and
+  section state diffs independent of current projections; separate runtime and
+  scheduler error/retry chains; run-pinned and promoted-registry component
+  versions; per-run/actor/task model token, cost, latency, error/retry and
+  task-budget health views; resolvable event/artifact provenance invariants;
+  read-only FastAPI endpoints; and an actual desktop/mobile Studio UI with six
+  inspectable panels and provenance details.
+Boundary check: StudioV2Service executes no SQL and reads no LangGraph state,
+  private connection or legacy state dictionary. The UI and API expose only GET
+  operations. No replay, failed-span restart, fork, A/B comparison, component
+  diff, badcase creation, release action, optimizer, online modification,
+  compatibility layer or RL work was added. Arbitrary entity metadata is not
+  projected and immutable Studio contracts reject hidden-reasoning keys.
+Tests: 297 passed in normal order and 297 passed with test files in reverse
+  order on the feature branch and again after the no-ff integration merge.
+  Fifty-one combined Studio, scheduler, evidence and Writer/Reviewer cases
+  passed in both orders. Four dense Branch-12 scenarios cover the complete view
+  surface. JavaScript syntax validation, Python compilation, desktop browser
+  interaction, console-log audit, and 390px responsive visual inspection also
+  passed. Only upstream websockets/uvicorn deprecation warnings remain.
+Failure/recovery tests: Scheduler projection deletion/rebuild produces exactly
+  the same historical task/budget diffs; evidence diffs rebuild only from
+  structured runtime events; 1,205 task nodes paginate as 500/500/205 without
+  duplication; cursors are view-bound; cross-page graph edges expose frontiers;
+  every graph node/edge has a resolvable event/artifact; runtime and scheduler
+  fail/retry causation is preserved; source content is restricted by artifact
+  kind/status; arbitrary internal metadata is excluded; invalid cursors,
+  filters, missing resources, content permissions and unsupported HTTP
+  mutations are rejected; and existing Studio restart, projection corruption,
+  outbox recovery and full scheduler/evidence recovery suites remain green.
+Integration merge commit: e363823
+Remote push: feature commit 5894c09 pushed successfully; integration push is
+  recorded by this plan commit on 2026-07-26.
+Remaining risks: Branch 13 must build immutable replay/fork, saved-result versus
+  live replay, failed-span restart/reapproval, A/B comparisons, component
+  diffs and provenance-complete badcase creation on these read models. Branch
+  14 owns offline structured candidate optimization and selection. Branch 15
+  still owns production entry-point migration, removal of transitional draft
+  paths, and stress/security hardening.
 ```
