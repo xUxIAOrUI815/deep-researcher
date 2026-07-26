@@ -267,6 +267,7 @@ def normalize_commands(
                 idempotency_key=f"kernel-{fingerprint}",
                 requires_approval=bool(raw.get("requires_approval", False)) or risk_level in {"high", "critical"},
                 risk_level=risk_level,
+                proposed_at=task.updated_at,
                 expires_at=raw.get("expires_at"),
                 metadata={**redact(dict(raw.get("metadata", {}) or {})), "round": round_no},
             )
