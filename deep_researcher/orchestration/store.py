@@ -8,7 +8,15 @@ import sqlite3
 import threading
 from typing import Any, Iterator
 
-from .models import RunControl, SchedulerEvent, TaskRecord
+from .models import (
+    RunControl,
+    SchedulerEvent,
+    SchedulerEventPage,
+    SchedulerEventQuery,
+    SchedulerTaskPage,
+    SchedulerTaskQuery,
+    TaskRecord,
+)
 
 
 class SchedulerStoreError(RuntimeError):
@@ -143,15 +151,69 @@ class SQLiteSchedulerStore:
         return TaskRecord.model_validate_json(row["record_json"], strict=False)
 
     def list_tasks(self, run_id: str, *, connection: sqlite3.Connection | None = None) -> tuple[TaskRecord, ...]:
-        conn = connection or self._connection
-        rows = conn.execute(
-            "SELECT record_json, checksum FROM scheduler_tasks WHERE run_id=? ORDER BY task_id", (run_id,)
-        ).fetchall()
         records: list[TaskRecord] = []
-        for row in rows:
-            self._verify(row["record_json"], row["checksum"], f"run {run_id} task projection")
-            records.append(TaskRecord.model_validate_json(row["record_json"], strict=False))
+        cursor: str | None = None
+        while True:
+            page = self.list_task_page(
+                SchedulerTaskQuery(
+                    run_id=run_id,
+                    after_task_id=cursor,
+                    limit=1000,
+                ),
+                connection=connection,
+            )
+            records.extend(page.items)
+            if page.next_after_task_id is None:
+                break
+            cursor = page.next_after_task_id
         return tuple(records)
+
+    def list_task_page(
+        self,
+        query: SchedulerTaskQuery,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> SchedulerTaskPage:
+        clauses = ["run_id=?"]
+        parameters: list[Any] = [query.run_id]
+        if query.after_task_id is not None:
+            clauses.append("task_id>?")
+            parameters.append(query.after_task_id)
+        if query.statuses:
+            placeholders = ",".join("?" for _ in query.statuses)
+            clauses.append(f"status IN ({placeholders})")
+            parameters.extend(status.value for status in query.statuses)
+        parameters.append(query.limit + 1)
+        conn = connection or self._connection
+        with self._lock:
+            rows = conn.execute(
+                f"SELECT task_id, record_json, checksum FROM scheduler_tasks "
+                f"WHERE {' AND '.join(clauses)} ORDER BY task_id LIMIT ?",
+                parameters,
+            ).fetchall()
+        selected = rows[: query.limit]
+        items: list[TaskRecord] = []
+        for row in selected:
+            self._verify(
+                row["record_json"],
+                row["checksum"],
+                f"run {query.run_id} task projection",
+            )
+            items.append(
+                TaskRecord.model_validate_json(
+                    row["record_json"],
+                    strict=False,
+                )
+            )
+        cursor = (
+            str(selected[-1]["task_id"])
+            if len(rows) > query.limit and selected
+            else None
+        )
+        return SchedulerTaskPage(
+            items=tuple(items),
+            next_after_task_id=cursor,
+        )
 
     def mutation_event(
         self,
@@ -244,15 +306,68 @@ class SQLiteSchedulerStore:
         )
 
     def list_events(self, run_id: str) -> tuple[SchedulerEvent, ...]:
-        with self._lock:
-            rows = self._connection.execute(
-                "SELECT event_json, checksum FROM scheduler_events WHERE run_id=? ORDER BY sequence_no", (run_id,)
-            ).fetchall()
         events: list[SchedulerEvent] = []
-        for row in rows:
-            self._verify(row["event_json"], row["checksum"], f"run {run_id} event")
-            events.append(SchedulerEvent.model_validate_json(row["event_json"], strict=False))
+        cursor = 0
+        while True:
+            page = self.list_event_page(
+                SchedulerEventQuery(
+                    run_id=run_id,
+                    after_sequence=cursor,
+                    limit=1000,
+                )
+            )
+            events.extend(page.items)
+            if page.next_after_sequence is None:
+                break
+            cursor = page.next_after_sequence
         return tuple(events)
+
+    def list_event_page(
+        self,
+        query: SchedulerEventQuery,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> SchedulerEventPage:
+        clauses = ["run_id=?", "sequence_no>?"]
+        parameters: list[Any] = [query.run_id, query.after_sequence]
+        if query.event_types:
+            placeholders = ",".join("?" for _ in query.event_types)
+            clauses.append(f"event_type IN ({placeholders})")
+            parameters.extend(event_type.value for event_type in query.event_types)
+        if query.task_id is not None:
+            clauses.append("task_id=?")
+            parameters.append(query.task_id)
+        parameters.append(query.limit + 1)
+        conn = connection or self._connection
+        with self._lock:
+            rows = conn.execute(
+                f"SELECT sequence_no, event_json, checksum FROM scheduler_events "
+                f"WHERE {' AND '.join(clauses)} ORDER BY sequence_no LIMIT ?",
+                parameters,
+            ).fetchall()
+        selected = rows[: query.limit]
+        items: list[SchedulerEvent] = []
+        for row in selected:
+            self._verify(
+                row["event_json"],
+                row["checksum"],
+                f"run {query.run_id} event",
+            )
+            items.append(
+                SchedulerEvent.model_validate_json(
+                    row["event_json"],
+                    strict=False,
+                )
+            )
+        cursor = (
+            int(selected[-1]["sequence_no"])
+            if len(rows) > query.limit and selected
+            else None
+        )
+        return SchedulerEventPage(
+            items=tuple(items),
+            next_after_sequence=cursor,
+        )
 
     def rebuild_projection(self, run_id: str) -> None:
         events = self.list_events(run_id)

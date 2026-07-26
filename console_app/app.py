@@ -201,6 +201,191 @@ def create_app(runtime_dir: str = ".console_runtime") -> FastAPI:
             headers={"Content-Disposition": f'attachment; filename="{run_id}.ndjson"'},
         )
 
+    def csv_values(value: str | None) -> tuple[str, ...]:
+        return tuple(
+            part.strip()
+            for part in (value or "").split(",")
+            if part.strip()
+        )
+
+    @app.get("/api/studio/v2/runs/{run_id}/task-graph")
+    async def get_studio_v2_task_graph(
+        run_id: str,
+        cursor: str | None = None,
+        limit: int = Query(default=100, ge=1, le=1000),
+        statuses: str | None = None,
+    ):
+        try:
+            return service.get_studio_v2_task_graph(
+                run_id,
+                cursor=cursor,
+                limit=limit,
+                statuses=csv_values(statuses),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/v2/runs/{run_id}/evidence-graph")
+    async def get_studio_v2_evidence_graph(
+        run_id: str,
+        cursor: str | None = None,
+        limit: int = Query(default=100, ge=1, le=1000),
+        entity_types: str | None = None,
+        statuses: str | None = None,
+    ):
+        try:
+            return service.get_studio_v2_evidence_graph(
+                run_id,
+                cursor=cursor,
+                limit=limit,
+                entity_types=csv_values(entity_types),
+                statuses=csv_values(statuses),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/v2/runs/{run_id}/state-diff")
+    async def get_studio_v2_state_diff(
+        run_id: str,
+        domain: Literal["scheduler", "evidence"],
+        after_sequence: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ):
+        try:
+            return service.get_studio_v2_state_diff(
+                run_id,
+                domain=domain,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/v2/runs/{run_id}/error-retry-chain")
+    async def get_studio_v2_error_retry_chain(
+        run_id: str,
+        domain: Literal["runtime", "scheduler"] = "runtime",
+        after_sequence: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=1000),
+    ):
+        try:
+            return service.get_studio_v2_errors(
+                run_id,
+                domain=domain,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/v2/runs/{run_id}/conflicts")
+    async def get_studio_v2_conflicts(
+        run_id: str,
+        cursor: str | None = None,
+        limit: int = Query(default=50, ge=1, le=1000),
+        statuses: str | None = None,
+    ):
+        try:
+            return service.get_studio_v2_conflicts(
+                run_id,
+                cursor=cursor,
+                limit=limit,
+                statuses=csv_values(statuses),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/v2/runs/{run_id}/components")
+    async def get_studio_v2_components(run_id: str):
+        try:
+            return {"items": service.get_studio_v2_components(run_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+
+    @app.get("/api/studio/v2/runs/{run_id}/metrics")
+    async def get_studio_v2_metrics(run_id: str):
+        try:
+            return service.get_studio_v2_metrics(run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+
+    @app.get("/api/studio/v2/events/{event_id}")
+    async def get_studio_v2_event(event_id: str):
+        try:
+            return service.studio_v2.run_event(event_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Event not found") from exc
+
+    @app.get(
+        "/api/studio/v2/runs/{run_id}/scheduler-events/{sequence_no}"
+    )
+    async def get_studio_v2_scheduler_event(
+        run_id: str,
+        sequence_no: int,
+    ):
+        try:
+            return service.studio_v2.scheduler_event(run_id, sequence_no)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Scheduler event not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/studio/v2/snapshots/{snapshot_id}")
+    async def get_studio_v2_snapshot(snapshot_id: str):
+        try:
+            return service.studio_v2.snapshot_navigation(snapshot_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Source snapshot not found",
+            ) from exc
+
+    @app.get("/api/studio/v2/artifacts/{artifact_id}/content")
+    async def get_studio_v2_artifact_content(artifact_id: str):
+        try:
+            content, media_type, content_hash = (
+                service.studio_v2.artifact_content(artifact_id)
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Artifact not found",
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return Response(
+            content,
+            media_type=media_type,
+            headers={
+                "ETag": f'"sha256-{content_hash}"',
+                "Cache-Control": "private, immutable, max-age=31536000",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get("/api/studio/v2/artifacts/{artifact_id}")
+    async def get_studio_v2_artifact(artifact_id: str):
+        try:
+            return service.studio_v2.artifact_metadata(artifact_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Artifact not found",
+            ) from exc
+
     @app.get("/api/runs/{research_id}/console")
     async def get_console(research_id: str):
         try:
@@ -232,6 +417,17 @@ def create_app(runtime_dir: str = ".console_runtime") -> FastAPI:
             {
                 "request": request,
                 "page_research_id": research_id or "",
+            },
+        )
+
+    @app.get("/studio/{run_id}", response_class=HTMLResponse)
+    async def studio_v2_shell(request: Request, run_id: str):
+        return templates.TemplateResponse(
+            request,
+            "studio_v2.html",
+            {
+                "request": request,
+                "studio_run_id": run_id,
             },
         )
 

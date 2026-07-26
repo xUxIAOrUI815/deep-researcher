@@ -196,6 +196,46 @@ class SchedulerSnapshot(ContractModel):
         return {record.task_id: record for record in self.tasks}
 
 
+class SchedulerTaskQuery(ContractModel):
+    run_id: str
+    after_task_id: str | None = None
+    statuses: tuple[TaskStatus, ...] = ()
+    limit: int = Field(default=100, ge=1, le=1000)
+
+    @field_validator("run_id", "after_task_id")
+    @classmethod
+    def _task_query_ids(cls, value: str | None) -> str | None:
+        return validate_identifier(value) if value is not None else None
+
+
+class SchedulerTaskPage(ContractModel):
+    items: tuple[TaskRecord, ...]
+    next_after_task_id: str | None = None
+
+    @field_validator("next_after_task_id")
+    @classmethod
+    def _task_cursor(cls, value: str | None) -> str | None:
+        return validate_identifier(value) if value is not None else None
+
+
+class SchedulerEventQuery(ContractModel):
+    run_id: str
+    after_sequence: int = Field(default=0, ge=0)
+    event_types: tuple[SchedulerEventType, ...] = ()
+    task_id: str | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+
+    @field_validator("run_id", "task_id")
+    @classmethod
+    def _event_query_ids(cls, value: str | None) -> str | None:
+        return validate_identifier(value) if value is not None else None
+
+
+class SchedulerEventPage(ContractModel):
+    items: tuple[SchedulerEvent, ...]
+    next_after_sequence: int | None = Field(default=None, ge=1)
+
+
 class ThinRuntimeState(ContractModel):
     run_id: str
     projection_revision: int = Field(ge=0)

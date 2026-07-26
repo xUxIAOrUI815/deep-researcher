@@ -838,11 +838,56 @@ class EvidenceVerificationEngine:
             *conflict_revisions,
             claim_revision,
         ]
+        original_entities = {
+            getattr(item, {
+                "Evidence": "evidence_id",
+                "AtomicFact": "fact_id",
+                "Citation": "citation_id",
+                "Conflict": "conflict_id",
+                "Claim": "claim_id",
+            }[type(item).__name__]): item
+            for item in (
+                *graph.evidence,
+                *graph.facts,
+                *graph.citations,
+                *graph.conflicts,
+                graph.claim,
+            )
+        }
+        state_changes = []
+        for item in revisions:
+            entity_type = type(item).__name__
+            id_field = {
+                "Evidence": "evidence_id",
+                "AtomicFact": "fact_id",
+                "Citation": "citation_id",
+                "Conflict": "conflict_id",
+                "Claim": "claim_id",
+            }[entity_type]
+            identifier = getattr(item, id_field)
+            original = original_entities.get(identifier)
+            before_status = (
+                original.status.value
+                if original is not None
+                else None
+            )
+            after_status = item.status.value
+            if before_status != after_status:
+                state_changes.append(
+                    {
+                        "entity_type": entity_type,
+                        "entity_id": identifier,
+                        "field": "status",
+                        "before": before_status,
+                        "after": after_status,
+                    }
+                )
         wrapper = {
             "schema": "ClaimVerificationArtifact@1",
             "graph_fingerprint": graph_fingerprint,
             "repair_round": repair_round,
             "summary": summary.model_dump(mode="json"),
+            "state_changes": state_changes,
             "entity_revisions": [
                 {
                     "entity_type": type(item).__name__,
@@ -1194,6 +1239,24 @@ class EvidenceVerificationEngine:
                     "invalidated_claim_ids": [
                         item.claim_id for item in invalidated_claims
                     ],
+                    "state_changes": [
+                        {
+                            "entity_type": "Conflict",
+                            "entity_id": conflict_id,
+                            "field": "status",
+                            "before": conflict.status.value,
+                            "after": resolved.status.value,
+                        },
+                        *(
+                            {
+                                "entity_type": "Claim",
+                                "entity_id": item.claim_id,
+                                "field": "status",
+                                "after": item.status.value,
+                            }
+                            for item in invalidated_claims
+                        ),
+                    ],
                 },
             )
         )
@@ -1252,6 +1315,15 @@ class EvidenceVerificationEngine:
                 payload={
                     "change": "conflict_accepted_unresolved",
                     "severity": conflict.severity.value,
+                    "state_changes": [
+                        {
+                            "entity_type": "Conflict",
+                            "entity_id": conflict_id,
+                            "field": "status",
+                            "before": conflict.status.value,
+                            "after": accepted.status.value,
+                        }
+                    ],
                 },
             )
         )
@@ -1831,6 +1903,45 @@ class EvidenceVerificationEngine:
             for item in (result.result_artifact_id, feedback_artifact_id)
             if item is not None
         )
+        artifact_payload = json.loads(
+            self.artifact_store.read_bytes(
+                result.result_artifact_id
+            ).decode("utf-8")
+        )
+        state_changes: list[dict[str, str | None]] = [
+            dict(item)
+            for item in artifact_payload.get("state_changes", ())
+            if isinstance(item, dict)
+        ]
+        if not state_changes:
+            state_changes = []
+            for item in artifact_payload.get("entity_revisions", ()):
+                entity_type = str(item.get("entity_type") or "")
+                value = item.get("value")
+                if not entity_type or not isinstance(value, dict):
+                    continue
+                id_field = {
+                    "Evidence": "evidence_id",
+                    "AtomicFact": "fact_id",
+                    "Citation": "citation_id",
+                    "Conflict": "conflict_id",
+                    "Claim": "claim_id",
+                }.get(entity_type)
+                if (
+                    id_field is None
+                    or not value.get(id_field)
+                    or not value.get("status")
+                ):
+                    continue
+                state_changes.append(
+                    {
+                        "entity_type": entity_type,
+                        "entity_id": str(value[id_field]),
+                        "field": "status",
+                        "before": None,
+                        "after": str(value["status"]),
+                    }
+                )
         common = {
             "run_id": result.run_id,
             "task_id": result.task_id,
@@ -1852,6 +1963,7 @@ class EvidenceVerificationEngine:
                     "verified_evidence_ids": list(summary.verified_evidence_ids),
                     "verified_citation_ids": list(summary.verified_citation_ids),
                     "high_impact_blocked": summary.high_impact_blocked,
+                    "state_changes": state_changes,
                 },
                 **common,
             )
@@ -1946,6 +2058,15 @@ class EvidenceVerificationEngine:
                     "coverage_score": assessment.coverage_score,
                     "citation_score": assessment.citation_score,
                     "blocked": assessment.blocked,
+                    "state_changes": [
+                        {
+                            "entity_type": "Section",
+                            "entity_id": section.section_id,
+                            "field": "coverage_status",
+                            "before": section.coverage_status.value,
+                            "after": coverage_status.value,
+                        }
+                    ],
                 },
             )
         )
