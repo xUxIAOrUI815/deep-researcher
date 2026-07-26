@@ -133,7 +133,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 12 | `codex/bg001-12-studio-v2` | integrated | e363823 | Read-only paginated Task/Evidence graphs, event-rebuilt state diffs, recovery/resource/version views, snapshot navigation, and Studio UI complete. |
 | 13 | `codex/bg001-13-studio-v3-v4` | integrated | b537426 | Immutable AgentKernel replay/fork, fresh approvals, aligned A/B, component diff, badcase provenance, durable recovery, APIs and Studio V4 UI complete. |
 | 14 | `codex/bg001-14-offline-evolution` | integrated | 80dbde8 | Reviewed trace/badcase/evaluation pool, bounded structured patches, strict gated selection, rejected-edit memory, human release, best_skill and rollback complete. |
-| 15 | `codex/bg001-15-integration-hardening` | pending | | |
+| 15 | `codex/bg001-15-integration-hardening` | integrated | c241efc | Production composition, draft removal, native-scheduler ADR, full recovery/security/stress gates, and capability-boundary documentation complete. |
 
 ## 00 - Foundation contracts and baseline
 
@@ -1318,4 +1318,61 @@ Remaining risks: Branch 15 must compose this offline loop with the fully migrate
   stress suites. The built-in optimizer is deliberately deterministic and
   network-free; a future offline model-backed generator must satisfy the same
   OfflineGeneratorResult and isolation contract before it can be enabled.
+```
+
+### Branch 15 execution record
+
+```text
+Branch: codex/bg001-15-integration-hardening
+Started from integration commit: 7fd26d2
+Scope delivered: A production ApplicationRuntime composition root over the
+  native event-sourced Scheduler, five AgentKernel roles, governed research
+  tools, candidate ingestion, independent Evidence verification, bounded
+  Supervisor/Worker convergence, Writer/Reviewer reporting and Studio
+  projections; a checksummed WAL application run catalog and append-only
+  transition journal; balanced root/evidence event lifecycle across start,
+  approval resume, failure and queued/active cancellation; OpenAI-compatible
+  structured model adapter plus governed Tavily/Exa/SmartScraper Worker
+  registry; real run_research CLI and projection-only Console/Studio service
+  with an application factory instead of module-global runtime state; restart
+  recovery, cancellation fencing, approval resolution and report-time scheduler
+  ownership; native candidate-to-Citation ingestion; immutable committed draft
+  baseline reads; removal of fat GraphState, module-global observers/managers,
+  fake/compatibility research gateway, legacy session projection, LangGraph
+  adapter/dependencies, Qdrant draft, and superseded agents/core/providers/
+  schemas/router/state-manager/vector-store execution paths and tests; accepted
+  native-scheduler ADR; current/optional/unsupported README capability matrix;
+  and production source, provider, database-lock, large artifact/report, long
+  trace, redaction and terminal-state hardening gates.
+Boundary check: No new logical role, external protocol, domain capability,
+  compatibility layer, online self-modification, model/weight training or RL
+  work was added. Existing MCP/A2A, replay/fork, evaluation, release and offline
+  evolution capabilities were composed and exercised but not expanded.
+Tests: 253 passed in normal order and 253 passed with test files in reverse
+  order on the feature branch; both 253-test orders passed again after the
+  no-ff integration merge. Seven production-application scenarios and four
+  integration-hardening stress scenarios passed. Python compilation, pyflakes
+  on non-export production modules, forbidden-import/dependency scan and
+  git-diff validation passed. Only upstream websockets/uvicorn deprecation
+  warnings remain.
+Failure/recovery tests: Full end-to-end verified report and citation creation,
+  concurrent run isolation, durable in-progress restart, active and queued
+  cancellation with late-completion fencing, model failure and secret
+  redaction, approval pause/resume with distinct balanced evidence spans,
+  provider credential/protocol failure and governed fallback, research/report
+  budgets, conflict and high-impact evidence blocking, bounded report repair
+  and targeted research, scheduler leases/projection rebuild/backup/corruption,
+  replay/fork side-effect reapproval and immutable source runs, dataset split
+  permissions, semantic release keep/reject/rollback, offline evolution
+  release/rollback, 24-writer WAL contention, >2 MB report artifacts, 1,507
+  event trace pagination/redaction, and production-source boundary checks are
+  covered.
+Integration merge commit: c241efc
+Remote push: feature commit 3a2c291 pushed successfully; integration push is
+  recorded by the immediately following plan commit on 2026-07-26.
+Remaining risks: Live output quality and availability depend on configured
+  model/search providers and are measured by the existing Frozen/Live
+  evaluation and release gates rather than claimed. RL remains explicitly out
+  of scope. The two test warnings are upstream websocket API deprecations and
+  do not affect current MCP protocol behavior.
 ```
