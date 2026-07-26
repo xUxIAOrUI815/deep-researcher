@@ -12,7 +12,7 @@ from datetime import datetime
 
 sys.path.insert(0, '.')
 
-from providers import SmartScraper
+from deep_researcher.providers import SmartScraper
 
 
 TEST_URLS = [
@@ -133,7 +133,6 @@ async def main():
         results.append(result)
         await asyncio.sleep(0.5)
     
-    await scraper.close()
     
     print("\n" + "="*70)
     print("测试结果汇总")

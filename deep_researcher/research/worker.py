@@ -527,10 +527,12 @@ class InformationGainEstimator:
             return ()
         for field in (
             "facts",
+            "atomic_facts",
             "claims",
             "evidence",
             "passages",
             "extractions",
+            "conflicts",
         ):
             raw = value.get(field)
             if raw is None:

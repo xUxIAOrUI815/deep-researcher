@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
-import tempfile
-import uuid
 from pathlib import Path
 
 import pytest
@@ -11,64 +8,73 @@ from fastapi.testclient import TestClient
 
 from console_app.app import create_app
 from console_app.service import ResearchConsoleService
-from schemas.console import ResearchCreateRequest
+from deep_researcher.application import ResearchCreateRequest
+from tests.fixtures.background001_application import (
+    STATEMENT,
+    build_deterministic_application,
+)
 
 
-@pytest.fixture
-def console_tmp_dir():
-    path = Path(tempfile.gettempdir()) / "mini-deep-research-console-tests" / uuid.uuid4().hex
-    path.mkdir(parents=True, exist_ok=True)
+def test_console_shell_routes_render_html(tmp_path: Path):
+    runtime, tools, _ = build_deterministic_application(tmp_path / "runtime")
+    app = create_app(runtime_dir=str(tmp_path / "runtime"), runtime=runtime)
     try:
-        yield path
+        with TestClient(app) as client:
+            for route in ["/", "/console/demo-run", "/report/demo-run"]:
+                response = client.get(route)
+                assert response.status_code == 200
+                assert "DeepResearcher 研究控制台" in response.text
+                assert "/static/app.js" in response.text
     finally:
-        shutil.rmtree(path, ignore_errors=True)
-
-
-def test_console_shell_routes_render_html(console_tmp_dir):
-    app = create_app(runtime_dir=str(console_tmp_dir))
-    with TestClient(app) as client:
-        for route in ["/", "/console/demo-run", "/report/demo-run"]:
-            response = client.get(route)
-            assert response.status_code == 200
-            assert "DeepResearcher 研究控制台" in response.text
-            assert "/static/app.js" in response.text
+        asyncio.run(runtime.aclose())
+        tools.close()
 
 
 @pytest.mark.asyncio
-async def test_console_service_exposes_console_and_report_views_for_offline_run(console_tmp_dir, monkeypatch):
-    monkeypatch.setenv("RESEARCHER_SCRAPER_MODE", "mock")
-    monkeypatch.setenv("RESEARCHER_SEARCH_MODE", "mock")
-
-    service = ResearchConsoleService(runtime_dir=str(console_tmp_dir))
+async def test_console_service_projects_the_production_application_runtime(
+    tmp_path: Path,
+):
+    runtime, tools, _ = build_deterministic_application(tmp_path / "runtime")
+    service = ResearchConsoleService(
+        runtime_dir=str(tmp_path / "runtime"),
+        runtime=runtime,
+    )
     try:
         created = await service.create_run(
             ResearchCreateRequest(
-                query="Compare HBM4 timeline claims across vendors",
-                instructions="Focus on conflicts and primary sources",
+                query="Compare verified benchmark claims across vendors",
+                instructions="Preserve conflicts and cite verified sources.",
                 depth="standard",
             )
         )
 
         summary = None
-        for _ in range(80):
+        for _ in range(200):
             summary = await service.get_console_summary(created.research_id)
-            if summary.status in {"completed", "failed"}:
+            if summary.status in {"completed", "failed", "cancelled"}:
                 break
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.01)
 
         assert summary is not None
         assert summary.status == "completed"
         assert summary.current_stage == "completed"
         assert summary.knowledge_summary.fact_count > 0
-        assert summary.context_summary.planner["coverage"] >= 0.0
+        assert summary.knowledge_summary.claim_count > 0
+        assert summary.knowledge_summary.evidence_count > 0
+        assert summary.context_summary.planner["required_sections"]
+        assert summary.context_summary.researcher["source_count"] > 0
         assert summary.timeline
+        assert summary.run_metadata["scheduler_status"] == "completed"
 
         report = await service.get_report_view(created.research_id)
         debug = await service.get_debug_view(created.research_id)
 
-        assert report.markdown
+        assert STATEMENT in report.markdown
         assert report.knowledge_summary.section_pack_count > 0
         assert debug.trace
-        assert "planner_action" in debug.state_summary
+        assert debug.state_summary["terminal_event_id"]
+        assert debug.raw_state["projection_schema"] == "StudioProjection@1"
     finally:
         await service.aclose()
+        await runtime.aclose()
+        tools.close()

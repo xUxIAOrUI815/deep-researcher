@@ -94,6 +94,7 @@ def build_research_runtime(
     worker_kernel_config: KernelConfig | None = None,
     lease_seconds: float = 120.0,
     max_claim_rounds: int = 100,
+    finalize_scheduler_run: bool = True,
 ) -> ResearchRuntime:
     """Build the full pool without introducing implicit provider/event fallbacks."""
     if not worker_ids or len(worker_ids) != len(set(worker_ids)):
@@ -192,6 +193,7 @@ def build_research_runtime(
         convergence=convergence,
         evidence=evidence,
         supervisor_lease_seconds=lease_seconds,
+        finalize_scheduler_run=finalize_scheduler_run,
     )
     runtime = ResearchRuntime(
         registry=registry,

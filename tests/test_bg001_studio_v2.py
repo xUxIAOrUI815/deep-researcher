@@ -826,15 +826,12 @@ def test_studio_v2_http_surface_and_shell_are_read_only(tmp_path):
     )
 
     async def seed_scheduler() -> None:
-        scheduler = NativeEventSourcedScheduler(
-            service.bg001_scheduler_store
-        )
-        await scheduler.create_run(
+        await service.runtime.scheduler.create_run(
             run_id,
             actor_id="agent_supervisor",
             mutation_id="mutation_studio_v2_http_run",
         )
-        await scheduler.submit(
+        await service.runtime.scheduler.submit(
             _task("studio_v2_http", run_id=run_id),
             actor_id="agent_supervisor",
             mutation_id="mutation_studio_v2_http_task",

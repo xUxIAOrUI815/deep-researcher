@@ -11,6 +11,8 @@ from deep_researcher.artifacts.store import ArtifactStore
 from deep_researcher.contracts import (
     ArtifactKind,
     AtomicFact,
+    Citation,
+    CitationStatus,
     Claim,
     ClaimStatus,
     Conflict,
@@ -235,7 +237,7 @@ class KnowledgeIngestionService:
             source_artifact_ids=source_artifact_ids,
         )
 
-    def ingest_researcher_outputs(
+    def ingest_research_observation(
         self,
         outputs: Mapping[str, Any],
         *,
@@ -252,8 +254,8 @@ class KnowledgeIngestionService:
             producer_id="agent_researcher",
             run_id=run_id,
             task_id=task_id,
-            content_schema="ResearcherOutputs@draft",
-            idempotency_key=_stable_payload_key("researcher-output", outputs),
+            content_schema="ResearchObservation@1",
+            idempotency_key=_stable_payload_key("research-observation", outputs),
         )
         artifact_ids.append(output_artifact.artifact_id)
         sources = list(outputs.get("sources", []) or [])
@@ -475,7 +477,7 @@ class KnowledgeIngestionService:
             issues=tuple(issues),
         )
 
-    def ingest_distiller_outputs(
+    def ingest_candidate_knowledge(
         self,
         outputs: Mapping[str, Any],
         *,
@@ -491,8 +493,8 @@ class KnowledgeIngestionService:
             producer_id="agent_distiller",
             run_id=run_id,
             task_id=task_id,
-            content_schema="DistillerOutputs@draft",
-            idempotency_key=_stable_payload_key("distiller-output", outputs),
+            content_schema="CandidateKnowledgeBatch@1",
+            idempotency_key=_stable_payload_key("candidate-knowledge", outputs),
         )
         artifact_ids.append(output_artifact.artifact_id)
         passages = self.repository.passages.list(run_id)
@@ -614,6 +616,7 @@ class KnowledgeIngestionService:
             fact_map[legacy_id] = fact
 
         claim_map: dict[str, Claim] = {}
+        citations: list[Citation] = []
         for raw in list(outputs.get("claims", []) or []):
             if not isinstance(raw, Mapping):
                 continue
@@ -627,10 +630,29 @@ class KnowledgeIngestionService:
                 for ref in raw.get("fact_ids", [])
                 if str(ref) in fact_map
             )
-            evidence_ids = tuple(
+            direct_evidence_ids = tuple(
                 evidence_map[str(ref)].evidence_id
                 for ref in raw.get("evidence_ids", [])
                 if str(ref) in evidence_map
+            )
+            evidence_ids = tuple(
+                dict.fromkeys(
+                    (
+                        *direct_evidence_ids,
+                        *(
+                            evidence_id
+                            for fact_id in facts
+                            for evidence_id in next(
+                                (
+                                    item.evidence_ids
+                                    for item in fact_map.values()
+                                    if item.fact_id == fact_id
+                                ),
+                                (),
+                            )
+                        ),
+                    )
+                )
             )
             statement = normalize_text(
                 str(raw.get("text") or raw.get("statement") or "")
@@ -655,6 +677,54 @@ class KnowledgeIngestionService:
             claim = self._stable_entity(claim)
             entities.append(claim)
             claim_map[legacy_id] = claim
+            for evidence_id in evidence_ids:
+                evidence_item = next(
+                    (
+                        item
+                        for item in evidence_map.values()
+                        if item.evidence_id == evidence_id
+                    ),
+                    None,
+                )
+                if evidence_item is None or not evidence_item.quotes:
+                    continue
+                quote = evidence_item.quotes[0]
+                passage = self.repository.passages.get(quote.passage_id)
+                if passage is None:
+                    continue
+                snapshot = self.repository.snapshots.get(passage.snapshot_id)
+                if snapshot is None:
+                    continue
+                citation = Citation(
+                    citation_id=_entity_id(
+                        "citation",
+                        run_id,
+                        f"{claim.claim_id}:{evidence_id}:{passage.passage_id}",
+                    ),
+                    claim_id=claim.claim_id,
+                    evidence_id=evidence_id,
+                    passage_id=passage.passage_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    source_id=snapshot.source_id,
+                    locator=passage.locator,
+                    quote=quote.quote,
+                    quote_start=quote.char_start,
+                    quote_end=quote.char_end,
+                    extraction_method=quote.extraction_method,
+                    status=CitationStatus.PROPOSED,
+                    provenance=self._provenance(
+                        producer_id="agent_research_worker",
+                        run_id=run_id,
+                        task_id=task_id,
+                        source_artifact_ids=(
+                            output_artifact.artifact_id,
+                            passage.text_artifact_id,
+                        ),
+                    ),
+                )
+                citation = self._stable_entity(citation)
+                entities.append(citation)
+                citations.append(citation)
 
         for raw in list(outputs.get("conflicts", []) or []):
             if not isinstance(raw, Mapping):
@@ -709,7 +779,7 @@ class KnowledgeIngestionService:
                 producer_id="agent_distiller",
                 run_id=run_id,
                 task_id=task_id,
-                content_schema="SectionEvidencePack@draft",
+                content_schema="SectionEvidencePack@1",
                 source_artifact_ids=(output_artifact.artifact_id,),
                 idempotency_key=_stable_payload_key("evidence-pack", pack),
             )
@@ -750,7 +820,7 @@ class KnowledgeIngestionService:
             ),
         )
 
-    def ingest_report(
+    def create_report_scaffold(
         self,
         report_payload: Mapping[str, Any],
         *,
@@ -765,7 +835,7 @@ class KnowledgeIngestionService:
             kind=ArtifactKind.REPORT,
             producer_id="agent_writer",
             run_id=run_id,
-            content_schema="FinalReportMarkdown@draft",
+            content_schema="ReportScaffold@1",
             idempotency_key=_stable_payload_key("report", report_payload),
         )
         raw_sections = list(report_outline.get("sections", []) or [])

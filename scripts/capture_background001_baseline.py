@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 from pathlib import Path
 import sys
@@ -11,14 +10,14 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from deep_researcher.baseline import capture_current_mock_pipeline
+from deep_researcher.baseline import load_committed_draft_baseline
 
 
-async def _main() -> int:
-    parser = argparse.ArgumentParser(description="Capture or verify the Background001 draft-pipeline baseline.")
+def _main() -> int:
+    parser = argparse.ArgumentParser(description="Inspect or verify the immutable Background001 pre-refactor baseline.")
     parser.add_argument("--check", type=Path, help="Compare the captured baseline with an existing JSON file.")
     args = parser.parse_args()
-    captured = await capture_current_mock_pipeline()
+    captured = load_committed_draft_baseline()
     if args.check is not None:
         expected = json.loads(args.check.read_text(encoding="utf-8"))
         if captured != expected:
@@ -29,4 +28,4 @@ async def _main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(_main()))
+    raise SystemExit(_main())

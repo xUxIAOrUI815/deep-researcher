@@ -555,6 +555,7 @@ class ResearchCoordinator:
         evidence: EvidenceRuntime,
         actor_id: str = "runtime_research_coordinator",
         supervisor_lease_seconds: float = 120.0,
+        finalize_scheduler_run: bool = True,
         clock=utc_now,
     ) -> None:
         if supervisor_lease_seconds <= 0:
@@ -568,6 +569,7 @@ class ResearchCoordinator:
         self.evidence = evidence
         self.actor_id = actor_id
         self.supervisor_lease_seconds = supervisor_lease_seconds
+        self.finalize_scheduler_run = finalize_scheduler_run
         self.clock = clock
 
     async def run(
@@ -887,7 +889,10 @@ class ResearchCoordinator:
 
         await self._complete_root(root_task, decision)
         current = await self.scheduler.snapshot(root_task.run_id)
-        if current.control.status == RunControlStatus.ACTIVE:
+        if (
+            self.finalize_scheduler_run
+            and current.control.status == RunControlStatus.ACTIVE
+        ):
             await self.scheduler.complete_run(
                 root_task.run_id,
                 actor_id=self.actor_id,

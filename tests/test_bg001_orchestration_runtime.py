@@ -6,14 +6,10 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
-import aiosqlite
 import pytest
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from deep_researcher.contracts import Budget, BudgetUsage, TaskEnvelope, TaskKind, TaskStatus
 from deep_researcher.orchestration import (
-    LangGraphCheckpointBridge,
-    LangGraphRuntimeAdapter,
     NativeEventSourcedScheduler,
     RunControlStatus,
     SchedulerCorruption,
@@ -23,7 +19,6 @@ from deep_researcher.orchestration import (
     SQLiteSchedulerStore,
     TaskCompletion,
     TaskEdit,
-    thin_state_from_snapshot,
 )
 
 
@@ -443,54 +438,11 @@ async def test_projection_rebuild_restart_backup_and_checksum_corruption(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_langgraph_adapter_conformance_and_checkpoint_contains_only_thin_state(tmp_path: Path):
-    store = SQLiteSchedulerStore(tmp_path / "langgraph-scheduler.sqlite3")
-    native = NativeEventSourcedScheduler(store)
-    connection = await aiosqlite.connect(tmp_path / "langgraph-checkpoints.sqlite3")
-    saver = AsyncSqliteSaver(connection)
-    bridge = LangGraphCheckpointBridge(saver)
-    scheduler = LangGraphRuntimeAdapter(native, bridge)
-    try:
-        await scheduler.create_run("run_scheduler", max_concurrency=1, actor_id="agent_supervisor", mutation_id="mutation_run")
-        task = await scheduler.submit(_task("thin"), actor_id="agent_supervisor", mutation_id="mutation_submit")
-        lease = (await scheduler.claim("run_scheduler", worker_id="agent_worker", limit=1, lease_seconds=30, mutation_id="mutation_claim"))[0]
-        assert lease.task.task_id == task.task_id
-        await scheduler.complete(
-            task.task_id,
-            TaskCompletion(result_id="result_thin", output_artifact_ids=("artifact_thin",)),
-            worker_id="agent_worker",
-            mutation_id="mutation_complete",
-        )
-        state = await scheduler.checkpoint_state("run_scheduler")
-        snapshot = await scheduler.snapshot("run_scheduler")
-        assert state == thin_state_from_snapshot(snapshot)
-        assert state.artifact_ids == ("artifact_thin",)
-        raw = await saver.aget_tuple(
-            {"configurable": {"thread_id": "run_scheduler", "checkpoint_ns": bridge.NAMESPACE}}
-        )
-        assert set(raw.checkpoint["channel_values"]) == {bridge.CHANNEL}
-        payload = raw.checkpoint["channel_values"][bridge.CHANNEL]
-        assert "task" not in payload
-        assert "goal" not in repr(payload)
-        assert "constraints" not in repr(payload)
-        rebuilt = await scheduler.rebuild_projection("run_scheduler")
-        assert rebuilt.by_id[task.task_id].result_id == "result_thin"
-    finally:
-        await scheduler.close()
-        await connection.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("adapter_kind", ["native", "langgraph"])
-async def test_native_and_langgraph_schedulers_share_one_behavioral_contract(tmp_path: Path, adapter_kind: str):
-    store = SQLiteSchedulerStore(tmp_path / f"{adapter_kind}-store.sqlite3")
-    native = NativeEventSourcedScheduler(store)
-    checkpoint_connection = None
-    if adapter_kind == "langgraph":
-        checkpoint_connection = await aiosqlite.connect(tmp_path / "conformance-checkpoints.sqlite3")
-        scheduler = LangGraphRuntimeAdapter(native, LangGraphCheckpointBridge(AsyncSqliteSaver(checkpoint_connection)))
-    else:
-        scheduler = native
+async def test_native_scheduler_satisfies_the_production_behavioral_contract(
+    tmp_path: Path,
+):
+    store = SQLiteSchedulerStore(tmp_path / "native-store.sqlite3")
+    scheduler = NativeEventSourcedScheduler(store)
     try:
         await scheduler.create_run("run_scheduler", max_concurrency=1, actor_id="agent_supervisor", mutation_id="mutation_run")
         await scheduler.submit(
@@ -537,5 +489,3 @@ async def test_native_and_langgraph_schedulers_share_one_behavioral_contract(tmp
         store.integrity_check()
     finally:
         await scheduler.close()
-        if checkpoint_connection is not None:
-            await checkpoint_connection.close()

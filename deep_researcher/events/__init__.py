@@ -1,5 +1,4 @@
 from .exporters import EventExportError, EventExporter, OTLPHTTPConfig, OTLPHTTPEventExporter
-from .observer import PersistentEventObserver, legacy_component_versions
 from .recorder import EventRecorder, RecordOutcome
 from .redaction import RedactionPolicy
 from .runtime import EventRuntime, build_event_runtime

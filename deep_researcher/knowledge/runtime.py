@@ -10,7 +10,6 @@ from typing import Any
 from deep_researcher.artifacts import SQLiteArtifactStore
 
 from .ingestion import KnowledgeIngestionService
-from .projection import LegacySessionProjectionAdapter
 from .repository import KnowledgeRepository
 from .retrieval import KnowledgeRetrievalService, VectorRetrievalAdapter
 from .sqlite_storage import SQLiteKnowledgeStorage
@@ -24,7 +23,6 @@ class KnowledgeRuntime:
     repository: KnowledgeRepository
     ingestion: KnowledgeIngestionService
     retrieval: KnowledgeRetrievalService
-    projection: LegacySessionProjectionAdapter
 
     def integrity_check(self) -> None:
         self.artifacts.integrity_check()
@@ -81,7 +79,6 @@ def build_knowledge_runtime(
         repository=repository,
         ingestion=KnowledgeIngestionService(artifacts, repository),
         retrieval=KnowledgeRetrievalService(repository, vector_adapter=vector_adapter),
-        projection=LegacySessionProjectionAdapter(repository),
     )
     runtime.integrity_check()
     return runtime
@@ -107,5 +104,4 @@ def restore_knowledge_runtime(backup: str | Path, destination: str | Path) -> Kn
         repository=repository,
         ingestion=KnowledgeIngestionService(artifacts, repository),
         retrieval=KnowledgeRetrievalService(repository),
-        projection=LegacySessionProjectionAdapter(repository),
     )

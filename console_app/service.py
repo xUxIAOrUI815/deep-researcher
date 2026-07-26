@@ -1,39 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+import json
 from pathlib import Path
-import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-import core.graph as graph_module
-from core.context_builders import PlannerContextBuilder, ResearcherContextBuilder, WriterContextBuilder
-from core.observability import get_observer, set_observer
-from core.run_context import RunContext
-from core.session_knowledge import KnowledgeManager
-from core.session_retrieval import SessionRetrievalService
-from deep_researcher.artifacts import SQLiteArtifactStore
-from deep_researcher.contracts import ComponentVersionSet
-from deep_researcher.events import EventQuery, EventRecorder, PersistentEventObserver, SQLiteEventStore
-from deep_researcher.knowledge import KnowledgeRepository, SQLiteKnowledgeStorage
-from deep_researcher.orchestration import SQLiteSchedulerStore
-from deep_researcher.studio import (
-    SQLiteStudioProjectionStore,
-    SQLiteStudioAdvancedStore,
-    KernelReplayBackend,
-    ReplayMode,
-    ReplayRequestStatus,
-    StudioAdvancedService,
-    StudioProjectionExporter,
-    StudioProjector,
-    StudioV2Service,
-    TimelineQuery,
-    normalize_projection_id,
-)
-from deep_researcher.version_registry import SQLiteVersionRegistryStore
-from schemas.console import (
+from deep_researcher.application import (
     ActiveAgentSummary,
+    ApplicationRunRecord,
+    ApplicationRuntime,
     ConsoleRunSummary,
     ContextPanelSummary,
     DebugViewResponse,
@@ -42,286 +18,453 @@ from schemas.console import (
     ResearchCreateRequest,
     ResearchCreateResponse,
     TimelineEventSummary,
+    build_live_application_runtime,
 )
-from schemas.state import DistillerOutputs, KnowledgeRefs, PlannerState, ResearcherOutputs, RunMetadata
-
-
-@dataclass
-class RunHandle:
-    research_id: str
-    thread_id: str
-    session_id: str
-    query: str
-    instructions: str = ""
-    depth: str = "standard"
-    started_at: datetime = field(default_factory=datetime.now)
-    status: str = "initializing"
-    error: str = ""
-    resumed: bool = False
-    run_id: str = ""
+from deep_researcher.artifacts import ArtifactQuery
+from deep_researcher.contracts import (
+    ArtifactKind,
+    ComponentVersionSet,
+    SectionCoverageStatus,
+    TaskStatus,
+)
+from deep_researcher.events import EventQuery
+from deep_researcher.studio import (
+    ReplayMode,
+    ReplayRequestStatus,
+    TimelineQuery,
+)
 
 
 class ResearchConsoleService:
-    def __init__(self, runtime_dir: str = ".console_runtime"):
-        self.runtime_dir = Path(runtime_dir)
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        self.graph_db_path = self.runtime_dir / "research_console.sqlite3"
-        self.knowledge_dir = self.runtime_dir / "knowledge"
-        self.knowledge_dir.mkdir(parents=True, exist_ok=True)
-        self.knowledge_manager = KnowledgeManager(
-            base_storage_path=str(self.knowledge_dir),
-            sqlite_filename="session_knowledge.sqlite3",
-        )
-        self.retrieval_service = SessionRetrievalService(self.knowledge_manager)
-        self.planner_context_builder = PlannerContextBuilder(self.retrieval_service)
-        self.researcher_context_builder = ResearcherContextBuilder(self.retrieval_service)
-        self.writer_context_builder = WriterContextBuilder(self.retrieval_service)
-        self.active_runs: dict[str, RunHandle] = {}
-        self._run_tasks: set[asyncio.Task[Any]] = set()
-        self._closed = False
-        self.event_store = SQLiteEventStore(self.runtime_dir / "events.sqlite3")
-        self.studio_store = SQLiteStudioProjectionStore(self.runtime_dir / "studio_projection.sqlite3")
-        self.studio_projector = StudioProjector(self.event_store, self.studio_store)
-        self.bg001_artifact_store = SQLiteArtifactStore(
-            self.runtime_dir / "bg001_artifacts.sqlite3"
-        )
-        self.bg001_knowledge_storage = SQLiteKnowledgeStorage(
-            self.runtime_dir / "bg001_knowledge.sqlite3",
-            artifact_store=self.bg001_artifact_store,
-        )
-        self.bg001_scheduler_store = SQLiteSchedulerStore(
-            self.runtime_dir / "bg001_scheduler.sqlite3"
-        )
-        self.bg001_version_store = SQLiteVersionRegistryStore(
-            self.runtime_dir / "bg001_version_registry.sqlite3"
-        )
-        self.studio_advanced_store = SQLiteStudioAdvancedStore(
-            self.runtime_dir / "studio_advanced.sqlite3"
-        )
-        self.studio_v2 = StudioV2Service(
-            event_store=self.event_store,
-            scheduler_store=self.bg001_scheduler_store,
-            knowledge_repository=KnowledgeRepository(
-                self.bg001_knowledge_storage
-            ),
-            artifact_store=self.bg001_artifact_store,
-            version_store=self.bg001_version_store,
-        )
-        self.event_recorder = EventRecorder(
-            self.event_store, (StudioProjectionExporter(self.studio_store),)
-        )
-        self.studio_advanced = StudioAdvancedService(
-            store=self.studio_advanced_store,
-            event_store=self.event_store,
-            artifact_store=self.bg001_artifact_store,
-            version_store=self.bg001_version_store,
-            studio_v2=self.studio_v2,
-            replay_backend=KernelReplayBackend(
-                event_store=self.event_store,
-                recorder=self.event_recorder,
-                artifact_store=self.bg001_artifact_store,
-                version_store=self.bg001_version_store,
-            ),
-        )
-        self.observer = PersistentEventObserver(self.event_recorder)
-        self._previous_observer = get_observer()
-        set_observer(self.observer)
-        self.studio_projector.sync_all()
-        while self.event_store.pending_exports(exporter_name="studio_projection", limit=1000):
-            outcomes = self.event_recorder.retry_pending(exporter_name="studio_projection", limit=1000)
-            if not any(outcome.exported_to for outcome in outcomes):
-                break
-        graph_module.SESSION_KNOWLEDGE_MANAGER = self.knowledge_manager
-        graph_module.SESSION_RETRIEVAL_SERVICE = self.retrieval_service
-        graph_module.PLANNER_CONTEXT_BUILDER = self.planner_context_builder
-        graph_module.RESEARCHER_CONTEXT_BUILDER = self.researcher_context_builder
-        graph_module.WRITER_CONTEXT_BUILDER = self.writer_context_builder
+    """Projection-only Console/Studio facade over ApplicationRuntime."""
 
-    async def create_run(self, request: ResearchCreateRequest) -> ResearchCreateResponse:
-        research_id = f"research-{uuid.uuid4().hex[:10]}"
-        thread_id = research_id
-        session_id = f"session_{research_id}"
-        handle = RunHandle(
-            research_id=research_id,
-            thread_id=thread_id,
-            session_id=session_id,
-            query=request.query,
-            instructions=request.instructions,
-            depth=request.depth,
+    def __init__(
+        self,
+        runtime_dir: str = ".console_runtime",
+        *,
+        runtime: ApplicationRuntime | None = None,
+    ) -> None:
+        self.runtime_dir = Path(runtime_dir)
+        self.runtime = runtime or build_live_application_runtime(
+            self.runtime_dir
         )
-        self.active_runs[research_id] = handle
-        self.knowledge_manager.create_or_get_session(
-            research_id=research_id,
-            root_query=request.query,
-            session_id=session_id,
-            metadata_json={
-                "instructions": request.instructions,
-                "depth": request.depth,
-                "created_via": "research_console",
-            },
-        )
-        task = asyncio.get_running_loop().create_task(self._execute_run(handle))
-        self._run_tasks.add(task)
-        task.add_done_callback(self._run_tasks.discard)
+        self._owns_runtime = runtime is None
+        self._run_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._closed = False
+
+    @property
+    def event_store(self):
+        return self.runtime.event_store
+
+    @property
+    def studio_store(self):
+        return self.runtime.studio_store
+
+    @property
+    def studio_projector(self):
+        return self.runtime.studio_projector
+
+    @property
+    def studio_v2(self):
+        return self.runtime.studio_v2
+
+    @property
+    def studio_advanced(self):
+        return self.runtime.studio_advanced
+
+    @property
+    def studio_advanced_store(self):
+        return self.runtime.studio_advanced_store
+
+    async def start(self) -> None:
+        for record in self.runtime.recoverable_runs():
+            self._schedule(record.research_id)
+
+    async def create_run(
+        self,
+        request: ResearchCreateRequest,
+    ) -> ResearchCreateResponse:
+        record = self.runtime.new_run(request)
+        self._schedule(record.research_id)
         return ResearchCreateResponse(
-            research_id=research_id,
-            thread_id=thread_id,
-            session_id=session_id,
-            status=handle.status,
-            console_url=f"/console/{research_id}",
-            report_url=f"/report/{research_id}",
+            research_id=record.research_id,
+            thread_id=record.thread_id,
+            session_id=record.session_id,
+            status=record.status.value,
+            console_url=f"/console/{record.research_id}",
+            report_url=f"/report/{record.research_id}",
         )
+
+    async def approve_run(
+        self,
+        research_id: str,
+        *,
+        approved_by: str,
+        note: str,
+    ) -> dict[str, Any]:
+        record = await self.runtime.approve_run(
+            research_id,
+            approved_by=approved_by,
+            note=note,
+        )
+        self._schedule(record.research_id)
+        return record.model_dump(mode="json")
+
+    async def cancel_run(
+        self,
+        research_id: str,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        record = await self.runtime.cancel_run(research_id, reason=reason)
+        return record.model_dump(mode="json")
+
+    def _schedule(self, research_id: str) -> None:
+        existing = self._run_tasks.get(research_id)
+        if existing is not None and not existing.done():
+            return
+        task = asyncio.get_running_loop().create_task(
+            self.runtime.execute(research_id)
+        )
+        self._run_tasks[research_id] = task
+
+        def completed(done: asyncio.Task[Any]) -> None:
+            self._run_tasks.pop(research_id, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(completed)
 
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
-        pending = [task for task in self._run_tasks if not task.done()]
+        pending = [item for item in self._run_tasks.values() if not item.done()]
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self._run_tasks.clear()
-        self.knowledge_manager.close()
-        if get_observer() is self.observer:
-            set_observer(self._previous_observer)
-        self.bg001_version_store.close()
-        self.studio_advanced_store.close()
-        self.bg001_scheduler_store.close()
-        self.bg001_knowledge_storage.close()
-        self.bg001_artifact_store.close()
-        self.studio_store.close()
-        self.event_store.close()
+        if self._owns_runtime:
+            await self.runtime.aclose()
 
-    async def _execute_run(self, handle: RunHandle) -> None:
-        config = {"configurable": {"thread_id": handle.thread_id, "research_id": handle.research_id}}
-        context = RunContext.from_config(config, root_query=handle.query)
-        handle.run_id = context.run_id
-        initial_state = self._build_initial_state(context, handle.query, handle.instructions, handle.depth)
-        saver = await graph_module.init_sqlite_saver(str(self.graph_db_path))
-        graph = graph_module.create_research_graph(saver)
-        handle.status = "running"
-        try:
-            await graph.ainvoke(initial_state, config)
-            handle.status = "completed"
-        except asyncio.CancelledError:
-            handle.status = "cancelled"
-            raise
-        except Exception as exc:
-            handle.status = "failed"
-            handle.error = str(exc)
-            self.knowledge_manager.store.update_session_status(
-                handle.research_id,
-                status="failed",
-                current_active_task_id=None,
-            )
-        finally:
-            await saver.conn.close()
-            self.studio_projector.sync_run(handle.run_id)
+    async def list_runs(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "research_id": item.research_id,
+                "session_id": item.session_id,
+                "query": item.query,
+                "status": item.status.value,
+                "run_id": item.run_id,
+                "current_round": self._current_round(item.run_id),
+                "updated_at": item.updated_at.isoformat(),
+                "console_url": f"/console/{item.research_id}",
+                "report_url": f"/report/{item.research_id}",
+            }
+            for item in self.runtime.application_store.list(limit=100)
+        ]
 
-    def _build_initial_state(
+    async def get_console_summary(
         self,
-        context: RunContext,
-        query: str,
-        instructions: str,
-        depth: str,
-    ) -> Dict[str, Any]:
-        return {
-            "user_query": query,
-            "normalized_query": query,
-            "run_metadata": RunMetadata(
-                research_id=context.research_id,
-                thread_id=context.thread_id,
-                run_id=context.run_id,
-                trace_id=context.trace_id,
-                session_id=context.session_id or f"session_{context.research_id}",
-                graph_version=context.graph_version,
-                prompt_version=context.prompt_version,
-                root_query=query,
-            ).model_dump(),
-            "task_tree": {},
-            "root_task_id": None,
-            "active_task_id": None,
-            "planner_state": PlannerState().model_dump(),
-            "researcher_outputs": ResearcherOutputs().model_dump(),
-            "distiller_outputs": DistillerOutputs().model_dump(),
-            "knowledge_refs": KnowledgeRefs(collection_name=context.knowledge_collection).model_dump(),
-            "report_outline": {},
-            "section_goals": [],
-            "section_evidence_packs": [],
-            "final_report": None,
-            "token_usage": {
-                "planning_tokens": 0,
-                "research_tokens": 0,
-                "distillation_tokens": 0,
-                "writing_tokens": 0,
-                "total_tokens": 0,
-            },
-            "state_events": [],
-            "error_state": None,
-            "fact_pool": [],
-            "atomic_facts": [],
-            "current_focus": None,
-            "completed_tasks": [],
-            "failed_tasks": [],
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "Research console run initialized.",
-                    "instructions": instructions,
-                    "depth": depth,
-                }
-            ],
-            "raw_scraped_data": [],
-            "search_results": [],
-        }
-
-    async def _load_graph_state(self, research_id: str, thread_id: str) -> Dict[str, Any]:
-        saver = await graph_module.init_sqlite_saver(str(self.graph_db_path))
+        research_id: str,
+    ) -> ConsoleRunSummary:
+        record = self._record(research_id)
         try:
-            graph = graph_module.create_research_graph(saver)
-            state = await graph.aget_state({"configurable": {"thread_id": thread_id, "research_id": research_id}})
-            return dict(state.values) if state and state.values else {}
-        except Exception:
-            return {}
-        finally:
-            await saver.conn.close()
+            snapshot = await self.runtime.scheduler.snapshot(record.run_id)
+            task_records = snapshot.tasks
+        except KeyError:
+            snapshot = None
+            task_records = ()
+        repository = self.runtime.knowledge_repository
+        sources = repository.sources.list(record.run_id)
+        claims = repository.claims.list(record.run_id)
+        facts = repository.facts.list(record.run_id)
+        evidence = repository.evidence.list(record.run_id)
+        conflicts = repository.conflicts.list(record.run_id)
+        sections = sorted(
+            repository.sections.list(record.run_id),
+            key=lambda item: (item.order, item.section_id),
+        )
+        report = repository.reports.get(record.report_id)
+        decisions = self.runtime.research_store.convergence_decisions(
+            record.run_id
+        )
+        latest_decision = decisions[-1] if decisions else None
+        active = next(
+            (
+                item
+                for item in task_records
+                if item.envelope.status
+                in {
+                    TaskStatus.RUNNING,
+                    TaskStatus.WAITING_APPROVAL,
+                    TaskStatus.READY,
+                }
+            ),
+            None,
+        )
+        task_tree = {
+            item.task_id: {
+                **item.envelope.model_dump(mode="json"),
+                "lease_owner": item.lease_owner,
+                "lease_expires_at": (
+                    item.lease_expires_at.isoformat()
+                    if item.lease_expires_at is not None
+                    else None
+                ),
+                "budget_usage": item.budget_usage.model_dump(mode="json"),
+                "result_id": item.result_id,
+                "output_artifact_ids": list(item.output_artifact_ids),
+                "error_ref": item.error_ref,
+            }
+            for item in task_records
+        }
+        outline = {
+            "report_id": record.report_id,
+            "title": report.title if report is not None else record.query,
+            "sections": [
+                {
+                    "section_id": item.section_id,
+                    "title": item.title,
+                    "goal": item.goal,
+                    "order": item.order,
+                    "claim_ids": list(item.claim_ids),
+                    "required_claim_ids": list(item.required_claim_ids),
+                    "coverage_score": item.coverage_score,
+                    "citation_score": item.citation_score,
+                    "coverage_status": item.coverage_status.value,
+                }
+                for item in sections
+            ],
+        }
+        gaps = [
+            {
+                "section_id": item.section_id,
+                "title": item.title,
+                "coverage_status": item.coverage_status.value,
+                "coverage_score": item.coverage_score,
+                "citation_score": item.citation_score,
+                "unsupported_claim_ids": list(item.unsupported_claim_ids),
+            }
+            for item in sections
+            if item.required_claim_ids
+            and item.coverage_status != SectionCoverageStatus.COMPLETE
+        ]
+        packs = self._artifact_payloads(
+            record.run_id,
+            ArtifactKind.EVIDENCE_PACK,
+        )
+        timeline = self._timeline(record.run_id)
+        current_round = latest_decision.cycle + 1 if latest_decision else 0
+        planner_state = (
+            latest_decision.model_dump(mode="json")
+            if latest_decision is not None
+            else {}
+        )
+        active_name = self._active_agent(record.current_stage, active)
+        latest_coverage = (
+            {
+                "required_section_ids": list(
+                    latest_decision.snapshot.required_section_ids
+                ),
+                "complete_section_ids": list(
+                    latest_decision.snapshot.complete_section_ids
+                ),
+                "coverage_gap_section_ids": list(
+                    latest_decision.snapshot.coverage_gap_section_ids
+                ),
+                "blocked_high_impact_claim_ids": list(
+                    latest_decision.snapshot.blocked_high_impact_claim_ids
+                ),
+                "severe_conflict_ids": list(
+                    latest_decision.snapshot.severe_conflict_ids
+                ),
+            }
+            if latest_decision is not None
+            else None
+        )
+        context = ContextPanelSummary(
+            planner={
+                "required_sections": (
+                    list(latest_decision.snapshot.required_section_ids)
+                    if latest_decision
+                    else []
+                ),
+                "gap_count": len(gaps),
+                "conflict_count": len(conflicts),
+                "decision": (
+                    latest_decision.action.value if latest_decision else None
+                ),
+            },
+            researcher={
+                "source_count": len(sources),
+                "candidate_claim_count": len(claims),
+                "task_count": len(task_records),
+                "active_task_id": active.task_id if active else None,
+            },
+            writer={
+                "verified_claim_count": len(
+                    [
+                        item
+                        for item in claims
+                        if item.status.value == "supported"
+                    ]
+                ),
+                "section_count": len(sections),
+                "report_artifact_id": record.report_artifact_id,
+            },
+        )
+        elapsed = max(
+            0.0,
+            (datetime.now(timezone.utc) - record.created_at).total_seconds(),
+        )
+        return ConsoleRunSummary(
+            research_id=record.research_id,
+            thread_id=record.thread_id,
+            session_id=record.session_id,
+            query=record.query,
+            status=record.status.value,
+            current_stage=record.current_stage,
+            current_round=current_round,
+            elapsed_seconds=elapsed,
+            resumed=record.resumed,
+            has_report=record.report_artifact_id is not None,
+            root_task_id=record.root_task_id,
+            active_task_id=active.task_id if active else None,
+            planner_state=planner_state,
+            report_outline=outline,
+            task_tree=task_tree,
+            timeline=timeline,
+            knowledge_summary=KnowledgeSummary(
+                source_count=len(sources),
+                claim_count=len(claims),
+                fact_count=len(facts),
+                evidence_count=len(evidence),
+                conflict_count=len(conflicts),
+                open_gap_count=len(gaps),
+                section_pack_count=len(packs),
+            ),
+            latest_coverage_snapshot=latest_coverage,
+            open_gaps=gaps,
+            conflicts=[
+                item.model_dump(mode="json") for item in conflicts
+            ],
+            section_packs=packs,
+            sources=[item.model_dump(mode="json") for item in sources],
+            active_agent=ActiveAgentSummary(
+                name=active_name,
+                status=record.current_stage,
+                target=active.envelope.title if active else "",
+                last_output_summary=(
+                    "; ".join(latest_decision.reasons)
+                    if latest_decision
+                    else ""
+                )[:240],
+            ),
+            context_summary=context,
+            run_metadata={
+                **record.model_dump(mode="json"),
+                "scheduler_status": (
+                    snapshot.control.status.value if snapshot else "not_created"
+                ),
+                "projection_revision": (
+                    snapshot.control.projection_revision if snapshot else 0
+                ),
+            },
+        )
 
-    def _get_handle(self, research_id: str) -> Optional[RunHandle]:
-        return self.active_runs.get(research_id)
+    async def get_report_view(self, research_id: str) -> ReportViewResponse:
+        summary = await self.get_console_summary(research_id)
+        record = self._record(research_id)
+        markdown = ""
+        if record.report_artifact_id is not None:
+            markdown = self.runtime.artifact_store.read_bytes(
+                record.report_artifact_id
+            ).decode("utf-8")
+        revisions = self.runtime.reporting_store.revisions(
+            record.run_id,
+            record.report_id,
+        )
+        latest = revisions[-1].model_dump(mode="json") if revisions else {}
+        return ReportViewResponse(
+            research_id=record.research_id,
+            session_id=record.session_id,
+            query=record.query,
+            status=record.status.value,
+            title=str(summary.report_outline.get("title") or record.query),
+            markdown=markdown,
+            outline=summary.report_outline,
+            report=latest,
+            knowledge_summary=summary.knowledge_summary,
+            latest_coverage_snapshot=summary.latest_coverage_snapshot,
+            open_gaps=summary.open_gaps,
+            section_packs=summary.section_packs,
+            context_summary=summary.context_summary,
+        )
 
-    def _resolve_run_id(self, research_id: str) -> str | None:
-        handle = self._get_handle(research_id)
-        if handle and handle.run_id:
-            return handle.run_id
-        thread_id = normalize_projection_id("thread", research_id)
-        page = self.studio_store.list_runs(thread_id=thread_id, limit=1000)
-        return str(page.items[-1]["run_id"]) if page.items else None
-
-    def _projected_run(self, research_id: str) -> dict[str, Any] | None:
-        run_id = self._resolve_run_id(research_id)
-        if not run_id:
-            return None
-        self.studio_projector.sync_run(run_id)
-        return self.studio_store.get_run(run_id)
+    async def get_debug_view(self, research_id: str) -> DebugViewResponse:
+        summary = await self.get_console_summary(research_id)
+        record = self._record(research_id)
+        run = self.get_studio_run(record.run_id)
+        spans = self.list_studio_spans(
+            record.run_id,
+            limit=1000,
+        )["items"]
+        return DebugViewResponse(
+            research_id=record.research_id,
+            session_id=record.session_id,
+            status=record.status.value,
+            state_summary={
+                "run_id": record.run_id,
+                "stage": record.current_stage,
+                "event_count": run.get("event_count", 0),
+                "span_count": len(spans),
+                "terminal_event_id": run.get("terminal_event_id"),
+                "application_revision": record.revision,
+            },
+            context_summary=summary.context_summary,
+            trace=summary.timeline,
+            raw_state={
+                "projection_schema": "StudioProjection@1",
+                "run": run,
+                "spans": spans,
+            },
+            snapshot_summary={
+                "application": record.model_dump(mode="json"),
+                "knowledge": summary.knowledge_summary.model_dump(mode="json"),
+                "coverage": summary.latest_coverage_snapshot or {},
+            },
+        )
 
     def list_studio_threads(
-        self, *, after_created_at: str | None = None, after_thread_id: str | None = None, limit: int = 100
+        self,
+        *,
+        after_created_at: str | None = None,
+        after_thread_id: str | None = None,
+        limit: int = 100,
     ) -> dict[str, Any]:
         self.studio_projector.sync_all()
         page = self.studio_store.list_threads(
-            after_created_at=after_created_at, after_thread_id=after_thread_id, limit=limit
+            after_created_at=after_created_at,
+            after_thread_id=after_thread_id,
+            limit=limit,
         )
         return {"items": list(page.items), "next_cursor": page.next_cursor}
 
     def list_studio_runs(
-        self, *, thread_id: str | None = None, after_started_at: str | None = None,
-        after_run_id: str | None = None, limit: int = 100,
+        self,
+        *,
+        thread_id: str | None = None,
+        after_started_at: str | None = None,
+        after_run_id: str | None = None,
+        limit: int = 100,
     ) -> dict[str, Any]:
         self.studio_projector.sync_all()
         page = self.studio_store.list_runs(
-            thread_id=thread_id, after_started_at=after_started_at,
-            after_run_id=after_run_id, limit=limit,
+            thread_id=thread_id,
+            after_started_at=after_started_at,
+            after_run_id=after_run_id,
+            limit=limit,
         )
         return {"items": list(page.items), "next_cursor": page.next_cursor}
 
@@ -332,12 +475,20 @@ class ResearchConsoleService:
             raise KeyError(run_id)
         return run
 
-    def list_studio_spans(self, run_id: str, *, after_started_sequence: int = 0, limit: int = 100) -> dict[str, Any]:
+    def list_studio_spans(
+        self,
+        run_id: str,
+        *,
+        after_started_sequence: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
         self.studio_projector.sync_run(run_id)
         if self.studio_store.get_run(run_id) is None:
             raise KeyError(run_id)
         page = self.studio_store.list_spans(
-            run_id, after_started_sequence=after_started_sequence, limit=limit
+            run_id,
+            after_started_sequence=after_started_sequence,
+            limit=limit,
         )
         return {"items": list(page.items), "next_cursor": page.next_cursor}
 
@@ -346,45 +497,29 @@ class ResearchConsoleService:
         if self.studio_store.get_run(query.run_id) is None:
             raise KeyError(query.run_id)
         page = self.studio_store.timeline(query)
-        return {"items": list(page.items), "next_after_sequence": page.next_after_sequence}
+        return {
+            "items": list(page.items),
+            "next_after_sequence": page.next_after_sequence,
+        }
 
     def export_studio_trace(self, run_id: str) -> dict[str, Any]:
         return self.studio_projector.export_trace(run_id)
 
-    def get_studio_v2_task_graph(
-        self,
-        run_id: str,
-        *,
-        cursor: str | None = None,
-        limit: int = 100,
-        statuses: tuple[str, ...] = (),
-    ) -> dict[str, Any]:
-        return self.studio_v2.task_graph(
-            run_id,
-            cursor=cursor,
-            limit=limit,
-            statuses=statuses,
-        ).model_dump(mode="json")
+    def get_studio_v2_task_graph(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self.studio_v2.task_graph(run_id, **kwargs).model_dump(mode="json")
 
     def get_studio_v2_evidence_graph(
         self,
         run_id: str,
         *,
-        cursor: str | None = None,
-        limit: int = 100,
         entity_types: tuple[str, ...] = (),
-        statuses: tuple[str, ...] = (),
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        options: dict[str, Any] = {
-            "cursor": cursor,
-            "limit": limit,
-            "statuses": statuses,
-        }
         if entity_types:
-            options["entity_types"] = entity_types
+            kwargs["entity_types"] = entity_types
         return self.studio_v2.evidence_graph(
             run_id,
-            **options,
+            **kwargs,
         ).model_dump(mode="json")
 
     def get_studio_v2_state_diff(
@@ -435,19 +570,10 @@ class ResearchConsoleService:
             raise ValueError("domain must be runtime or scheduler")
         return page.model_dump(mode="json")
 
-    def get_studio_v2_conflicts(
-        self,
-        run_id: str,
-        *,
-        cursor: str | None = None,
-        limit: int = 50,
-        statuses: tuple[str, ...] = (),
-    ) -> dict[str, Any]:
+    def get_studio_v2_conflicts(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
         return self.studio_v2.conflict_navigation(
             run_id,
-            cursor=cursor,
-            limit=limit,
-            statuses=statuses,
+            **kwargs,
         ).model_dump(mode="json")
 
     def get_studio_v2_components(self, run_id: str) -> list[dict[str, Any]]:
@@ -459,10 +585,7 @@ class ResearchConsoleService:
     def get_studio_v2_metrics(self, run_id: str) -> dict[str, Any]:
         return self.studio_v2.metrics(run_id).model_dump(mode="json")
 
-    def get_studio_component_selection(
-        self,
-        run_id: str,
-    ) -> dict[str, Any]:
+    def get_studio_component_selection(self, run_id: str) -> dict[str, Any]:
         page = self.event_store.list(EventQuery(run_id, limit=1))
         if not page.items:
             raise KeyError(run_id)
@@ -487,22 +610,19 @@ class ResearchConsoleService:
         restart_failed_span: bool,
         environment_label: str | None,
     ) -> dict[str, Any]:
-        record = self.studio_advanced.prepare_replay(
+        return self.studio_advanced.prepare_replay(
             source_run_id=run_id,
             source_span_id=span_id,
             mode=ReplayMode(mode),
-            selected_component_versions=(
-                ComponentVersionSet.model_validate(
-                    selected_component_versions,
-                    strict=False,
-                )
+            selected_component_versions=ComponentVersionSet.model_validate(
+                selected_component_versions,
+                strict=False,
             ),
             requested_by=requested_by,
             reason=reason,
             restart_failed_span=restart_failed_span,
             environment_label=environment_label,
-        )
-        return record.model_dump(mode="json")
+        ).model_dump(mode="json")
 
     def list_studio_replays(
         self,
@@ -511,12 +631,11 @@ class ResearchConsoleService:
         cursor: str | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
-        page = self.studio_advanced_store.list(
+        return self.studio_advanced_store.list(
             statuses=tuple(ReplayRequestStatus(item) for item in statuses),
             cursor=cursor,
             limit=limit,
-        )
-        return page.model_dump(mode="json")
+        ).model_dump(mode="json")
 
     def get_studio_replay(self, request_id: str) -> dict[str, Any]:
         record = self.studio_advanced_store.get(request_id)
@@ -524,47 +643,25 @@ class ResearchConsoleService:
             raise KeyError(request_id)
         return record.model_dump(mode="json")
 
-    def approve_studio_replay(
-        self,
-        *,
-        request_id: str,
-        command_fingerprint: str,
-        approved_by: str,
-        reason: str,
-    ) -> dict[str, Any]:
+    def approve_studio_replay(self, **kwargs: Any) -> dict[str, Any]:
         return self.studio_advanced.approve_replay(
-            replay_request_id=request_id,
-            command_fingerprint=command_fingerprint,
-            approved_by=approved_by,
-            reason=reason,
+            replay_request_id=kwargs.pop("request_id"),
+            **kwargs,
         ).model_dump(mode="json")
 
-    async def execute_studio_replay(
-        self,
-        request_id: str,
-    ) -> dict[str, Any]:
+    async def execute_studio_replay(self, request_id: str) -> dict[str, Any]:
         return (
             await self.studio_advanced.execute_replay(request_id)
         ).model_dump(mode="json")
 
-    def compare_studio_runs(
-        self,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        return self.studio_advanced.compare_runs(
-            **kwargs
-        ).model_dump(mode="json")
+    def compare_studio_runs(self, **kwargs: Any) -> dict[str, Any]:
+        return self.studio_advanced.compare_runs(**kwargs).model_dump(mode="json")
 
-    def get_studio_comparison(
-        self,
-        comparison_id: str,
-    ) -> dict[str, Any]:
-        comparison = self.studio_advanced_store.comparison(
-            comparison_id
-        )
-        if comparison is None:
+    def get_studio_comparison(self, comparison_id: str) -> dict[str, Any]:
+        value = self.studio_advanced_store.comparison(comparison_id)
+        if value is None:
             raise KeyError(comparison_id)
-        return comparison.model_dump(mode="json")
+        return value.model_dump(mode="json")
 
     def get_studio_component_diff(
         self,
@@ -576,305 +673,119 @@ class ResearchConsoleService:
             right_version_id,
         ).model_dump(mode="json")
 
-    def create_studio_badcase(
-        self,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+    def create_studio_badcase(self, **kwargs: Any) -> dict[str, Any]:
         return self.studio_advanced.create_badcase(
             **kwargs
         ).model_dump(mode="json")
 
-    def get_studio_badcase(
-        self,
-        badcase_id: str,
-    ) -> dict[str, Any]:
-        badcase = self.studio_advanced_store.badcase(badcase_id)
-        if badcase is None:
+    def get_studio_badcase(self, badcase_id: str) -> dict[str, Any]:
+        value = self.studio_advanced_store.badcase(badcase_id)
+        if value is None:
             raise KeyError(badcase_id)
-        return badcase.model_dump(mode="json")
+        return value.model_dump(mode="json")
 
-    async def list_runs(self) -> List[Dict[str, Any]]:
-        rows = self.knowledge_manager.store.conn.execute(
-            "SELECT research_id, session_id, root_query, status, updated_at, current_round FROM research_sessions ORDER BY updated_at DESC LIMIT 20"
-        ).fetchall()
-        output = []
-        for row in rows:
-            handle = self._get_handle(str(row["research_id"]))
-            projected = self._projected_run(str(row["research_id"]))
-            projected_status = {
-                "succeeded": "completed",
-                "failed": "failed",
-                "cancelled": "cancelled",
-                "running": "running",
-                "queued": "initializing",
-                "waiting": "waiting",
-            }.get(str((projected or {}).get("status", "")), "")
-            output.append(
-                {
-                    "research_id": str(row["research_id"]),
-                    "session_id": str(row["session_id"]),
-                    "query": str(row["root_query"]),
-                    "status": (handle.status if handle else projected_status or str(row["status"])),
-                    "run_id": (projected or {}).get("run_id", ""),
-                    "current_round": int(row["current_round"]),
-                    "updated_at": str(row["updated_at"]),
-                    "console_url": f"/console/{row['research_id']}",
-                    "report_url": f"/report/{row['research_id']}",
-                }
-            )
+    def _record(self, research_id: str) -> ApplicationRunRecord:
+        record = self.runtime.application_store.get(research_id)
+        if record is None:
+            raise KeyError(research_id)
+        return record
+
+    def _current_round(self, run_id: str) -> int:
+        decisions = self.runtime.research_store.convergence_decisions(run_id)
+        return decisions[-1].cycle + 1 if decisions else 0
+
+    def _artifact_payloads(
+        self,
+        run_id: str,
+        kind: ArtifactKind,
+    ) -> list[dict[str, Any]]:
+        page = self.runtime.artifact_store.list(
+            ArtifactQuery(run_id=run_id, kinds=(kind,), limit=1000)
+        )
+        output: list[dict[str, Any]] = []
+        for item in page.items:
+            try:
+                value = json.loads(
+                    self.runtime.artifact_store.read_bytes(
+                        item.artifact_id
+                    ).decode("utf-8")
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if isinstance(value, dict):
+                output.append(value)
         return output
 
-    async def get_console_summary(self, research_id: str) -> ConsoleRunSummary:
-        session = self.knowledge_manager.store.get_session(research_id)
-        if session is None:
-            raise KeyError(research_id)
-        thread_id = self._get_handle(research_id).thread_id if self._get_handle(research_id) else research_id
-        state = await self._load_graph_state(research_id, thread_id)
-        snapshot = self.knowledge_manager.get_session_snapshot(research_id, session.session_id)
-        planner_context = self.planner_context_builder.build(
-            research_id=research_id,
-            session_id=session.session_id,
-            user_query=session.root_query,
-            task_tree=state.get("task_tree", {}),
-            active_task_id=state.get("active_task_id"),
-        ).model_dump()
-        researcher_context = self.researcher_context_builder.build(
-            research_id=research_id,
-            session_id=session.session_id,
-            root_user_query=session.root_query,
-            task_id=state.get("active_task_id"),
-            task=state.get("task_tree", {}).get(state.get("active_task_id")),
-        ).model_dump()
-        writer_context = self.writer_context_builder.build(
-            research_id=research_id,
-            session_id=session.session_id,
-            report_outline=state.get("report_outline", {}),
-            section_goals=state.get("section_goals", []),
-            fallback_section_packs=state.get("section_evidence_packs", []),
-        ).model_dump()
-        handle = self._get_handle(research_id)
-        projected_run = self._projected_run(research_id)
-        timeline = self._build_timeline(research_id)
-        status = self._derive_status(state, handle, projected_run)
-        current_stage = self._derive_stage(state, handle, [item.model_dump() for item in timeline])
-        elapsed_seconds = max(
-            0.0,
-            (datetime.now() - (handle.started_at if handle else session.created_at)).total_seconds(),
-        )
-        return ConsoleRunSummary(
-            research_id=research_id,
-            thread_id=thread_id,
-            session_id=session.session_id,
-            query=session.root_query,
-            status=status,
-            current_stage=current_stage,
-            current_round=session.current_round,
-            elapsed_seconds=elapsed_seconds,
-            resumed=bool(handle and handle.resumed),
-            has_report=bool(state.get("final_report")),
-            root_task_id=state.get("root_task_id"),
-            active_task_id=state.get("active_task_id"),
-            planner_state=state.get("planner_state", {}),
-            report_outline=state.get("report_outline", {}),
-            task_tree=state.get("task_tree", {}),
-            timeline=timeline,
-            knowledge_summary=self._build_knowledge_summary(snapshot),
-            latest_coverage_snapshot=snapshot.get("latest_coverage_snapshot"),
-            open_gaps=snapshot.get("open_gaps", []),
-            conflicts=snapshot.get("conflicts", []),
-            section_packs=snapshot.get("section_evidence_packs", []),
-            sources=snapshot.get("sources", []),
-            active_agent=self._build_active_agent_summary(state, current_stage),
-            context_summary=ContextPanelSummary(
-                planner=self._summarize_planner_context(planner_context),
-                researcher=self._summarize_researcher_context(researcher_context),
-                writer=self._summarize_writer_context(writer_context),
-            ),
-            run_metadata=state.get("run_metadata", {}),
-        )
-
-    async def get_report_view(self, research_id: str) -> ReportViewResponse:
-        summary = await self.get_console_summary(research_id)
-        state = await self._load_graph_state(research_id, summary.thread_id)
-        report = dict(state.get("final_report", {}) or {})
-        return ReportViewResponse(
-            research_id=research_id,
-            session_id=summary.session_id,
-            query=summary.query,
-            status=summary.status,
-            title=str((summary.report_outline or {}).get("title", "") or summary.query),
-            markdown=str(report.get("markdown", "") or ""),
-            outline=summary.report_outline,
-            report=report,
-            knowledge_summary=summary.knowledge_summary,
-            latest_coverage_snapshot=summary.latest_coverage_snapshot,
-            open_gaps=summary.open_gaps,
-            section_packs=summary.section_packs,
-            context_summary=summary.context_summary,
-        )
-
-    async def get_debug_view(self, research_id: str) -> DebugViewResponse:
-        summary = await self.get_console_summary(research_id)
-        snapshot = self.knowledge_manager.get_session_snapshot(research_id, summary.session_id)
-        run_id = self._resolve_run_id(research_id)
-        run = self.studio_store.get_run(run_id) if run_id else None
-        spans = self.list_studio_spans(run_id, limit=1000)["items"] if run_id else []
-        planner_action = None
-        for event in reversed(summary.timeline):
-            if event.payload.get("action"):
-                planner_action = event.payload["action"]
-                break
-        return DebugViewResponse(
-            research_id=research_id,
-            session_id=summary.session_id,
-            status=summary.status,
-            state_summary={
-                "run_id": run_id,
-                "planner_action": planner_action,
-                "event_count": (run or {}).get("event_count", 0),
-                "span_count": len(spans),
-                "terminal_event_id": (run or {}).get("terminal_event_id"),
-            },
-            context_summary=summary.context_summary,
-            trace=summary.timeline,
-            raw_state={
-                "projection_schema": "StudioProjection@1",
-                "run": run or {},
-                "spans": spans,
-            },
-            snapshot_summary={
-                "session": snapshot.get("session", {}),
-                "knowledge_refs": snapshot.get("knowledge_refs", {}),
-                "stats": snapshot.get("stats", {}),
-            },
-        )
-
-    def _build_knowledge_summary(self, snapshot: Dict[str, Any]) -> KnowledgeSummary:
-        refs = snapshot.get("knowledge_refs", {}) or {}
-        return KnowledgeSummary(
-            source_count=len(refs.get("source_ids", [])),
-            claim_count=len(snapshot.get("claims", [])),
-            fact_count=len(snapshot.get("facts", [])),
-            evidence_count=len(snapshot.get("evidence", [])),
-            conflict_count=len(snapshot.get("conflicts", [])),
-            open_gap_count=len(snapshot.get("open_gaps", [])),
-            section_pack_count=len(snapshot.get("section_evidence_packs", [])),
-        )
-
-    def _build_timeline(self, research_id: str) -> List[TimelineEventSummary]:
-        projected = self._projected_run(research_id)
-        if not projected:
+    def _timeline(self, run_id: str) -> list[TimelineEventSummary]:
+        run = self.runtime.studio_store.get_run(run_id)
+        if run is None:
+            self.runtime.studio_projector.sync_run(run_id)
+            run = self.runtime.studio_store.get_run(run_id)
+        if run is None:
             return []
-        after = max(0, int(projected["event_count"]) - 200)
-        page = self.studio_store.timeline(TimelineQuery(projected["run_id"], after_sequence=after, limit=200))
-        events = []
-        for item in page.items:
-            payload = dict(item.get("payload", {}) or {})
-            permissions = {
-                key: payload[key]
-                for key in ("permission", "permissions", "approval", "risk_level", "policy_decision")
-                if key in payload
-            }
-            events.append(TimelineEventSummary(
-                event_id=str(item.get("event_id", "")), event_type=str(item.get("event_type", "")),
-                timestamp=str(item.get("occurred_at", "")), level=str(item.get("level", "info")),
-                message=str(payload.get("message", "")), node_name=payload.get("node_name"),
-                agent_name=str(item.get("actor_id", "")), task_id=item.get("task_id"),
-                section_id=payload.get("section_id"), payload=payload,
-                sequence_no=int(item.get("sequence_no", 0)), run_id=str(item.get("run_id", "")),
-                trace_id=str(item.get("trace_id", "")), span_id=str(item.get("span_id", "")),
-                parent_span_id=item.get("parent_span_id"), span_kind=str(item.get("span_kind", "")),
-                actor_id=str(item.get("actor_id", "")), status=str(item.get("status", "")),
-                input_artifact_ids=list(item.get("input_artifact_ids", []) or []),
-                output_artifact_ids=list(item.get("output_artifact_ids", []) or []),
-                state_artifact_id=item.get("state_artifact_id"), usage=dict(item.get("usage", {}) or {}),
-                latency_ms=float(item.get("latency_ms", 0.0)), attempt=int(item.get("attempt", 1)),
-                error=item.get("error"), component_versions=dict(item.get("component_versions", {}) or {}),
-                permissions=permissions,
-            ))
-        return events
-
-    def _derive_status(self, state: Dict[str, Any], handle: Optional[RunHandle], projected_run: dict[str, Any] | None = None) -> str:
-        if handle and handle.status in {"initializing", "running", "failed", "cancelled", "completed"}:
-            return handle.status
-        if projected_run:
-            projected_status = {
-                "succeeded": "completed", "failed": "failed", "cancelled": "cancelled",
-                "running": "running", "queued": "initializing", "waiting": "waiting",
-            }.get(str(projected_run.get("status")))
-            if projected_status:
-                return projected_status
-        if state.get("final_report"):
-            return "completed"
-        if state.get("error_state"):
-            return "failed"
-        return "idle"
-
-    def _derive_stage(self, state: Dict[str, Any], handle: Optional[RunHandle], observer_events: List[Dict[str, Any]]) -> str:
-        if state.get("final_report"):
-            return "completed"
-        if handle and handle.status == "completed":
-            return "completed"
-        if handle and handle.status == "failed":
-            return "failed"
-        if observer_events:
-            latest = observer_events[-1].get("event_type", "")
-            if latest == "run_completed":
-                return "completed"
-            if latest == "run_failed":
-                return "failed"
-            if latest == "report_changed":
-                return "writing"
-            if latest in {"evidence_changed", "verification_completed"}:
-                return "knowledge_updating"
-            if latest in {"tool_started", "tool_completed", "model_started", "model_completed", "decision_recorded"}:
-                return "researching"
-            if latest in {"task_created", "task_state_changed", "span_started", "span_completed"}:
-                return "planning"
-        planner_action = (state.get("planner_state", {}) or {}).get("action")
-        if planner_action == "start_writing":
-            return "writing"
-        if state.get("active_task_id"):
-            return "researching"
-        return "planning" if state.get("task_tree") else "initializing"
-
-    def _build_active_agent_summary(self, state: Dict[str, Any], current_stage: str) -> ActiveAgentSummary:
-        task_id = state.get("active_task_id") or (state.get("planner_state", {}) or {}).get("next_task_id")
-        task = (state.get("task_tree", {}) or {}).get(task_id, {}) if task_id else {}
-        stage_to_agent = {
-            "planning": "planner",
-            "researching": "researcher",
-            "knowledge_updating": "distiller",
-            "writing": "writer",
-            "completed": "writer",
-            "failed": "system",
-        }
-        return ActiveAgentSummary(
-            name=stage_to_agent.get(current_stage, "planner"),
-            status=current_stage,
-            target=str(task.get("title") or task.get("query") or ""),
-            last_output_summary=str((state.get("planner_state", {}) or {}).get("rationale", ""))[:240],
+        after = max(0, int(run["event_count"]) - 500)
+        page = self.runtime.studio_store.timeline(
+            TimelineQuery(run_id, after_sequence=after, limit=500)
         )
+        return [
+            TimelineEventSummary(
+                event_id=str(item.get("event_id", "")),
+                event_type=str(item.get("event_type", "")),
+                timestamp=str(item.get("occurred_at", "")),
+                level=str(item.get("level", "info")),
+                message=str((item.get("payload") or {}).get("message", "")),
+                node_name=(item.get("payload") or {}).get("node_name"),
+                agent_name=str(item.get("actor_id", "")),
+                task_id=item.get("task_id"),
+                section_id=(item.get("payload") or {}).get("section_id"),
+                payload=dict(item.get("payload") or {}),
+                sequence_no=int(item.get("sequence_no", 0)),
+                run_id=str(item.get("run_id", "")),
+                trace_id=str(item.get("trace_id", "")),
+                span_id=str(item.get("span_id", "")),
+                parent_span_id=item.get("parent_span_id"),
+                span_kind=str(item.get("span_kind", "")),
+                actor_id=str(item.get("actor_id", "")),
+                status=str(item.get("status", "")),
+                input_artifact_ids=list(
+                    item.get("input_artifact_ids", []) or []
+                ),
+                output_artifact_ids=list(
+                    item.get("output_artifact_ids", []) or []
+                ),
+                state_artifact_id=item.get("state_artifact_id"),
+                usage=dict(item.get("usage") or {}),
+                latency_ms=float(item.get("latency_ms", 0.0)),
+                attempt=int(item.get("attempt", 1)),
+                error=item.get("error"),
+                component_versions=dict(
+                    item.get("component_versions") or {}
+                ),
+                permissions={
+                    key: (item.get("payload") or {})[key]
+                    for key in (
+                        "permission",
+                        "permissions",
+                        "approval",
+                        "risk_level",
+                        "policy_decision",
+                    )
+                    if key in (item.get("payload") or {})
+                },
+            )
+            for item in page.items
+        ]
 
-    def _summarize_planner_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    @staticmethod
+    def _active_agent(stage: str, active: Any) -> str:
+        if active is not None and active.envelope.assigned_actor_id:
+            return str(active.envelope.assigned_actor_id)
         return {
-            "ready_sections": payload.get("writing_ready_sections", []),
-            "coverage": (payload.get("coverage_summary", {}) or {}).get("avg_section_coverage", 0.0),
-            "gap_count": len(payload.get("unresolved_gaps", [])),
-            "conflict_count": len(payload.get("conflict_hotspots", [])),
-        }
-
-    def _summarize_researcher_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "seen_sources": len(payload.get("already_seen_source_ids", [])),
-            "gap_count": len(payload.get("unresolved_gaps", [])),
-            "focus_sections": payload.get("focus_sections", []),
-            "authority_gaps": payload.get("authority_gaps", []),
-        }
-
-    def _summarize_writer_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "context_source": payload.get("context_source", "fallback"),
-            "pack_count": len(payload.get("section_evidence_packs", [])),
-            "section_count": len(payload.get("section_contexts", [])),
-        }
+            "initializing": "runtime_application",
+            "researching": "research_supervisor",
+            "reporting": "synthesis_writer",
+            "waiting_approval": "human_approval",
+            "completed": "report_reviewer",
+            "failed": "runtime_application",
+            "cancelled": "runtime_application",
+        }.get(stage, "runtime_application")

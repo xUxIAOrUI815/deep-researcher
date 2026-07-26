@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 from .exporters import OTLPHTTPConfig, OTLPHTTPEventExporter
-from .observer import PersistentEventObserver
 from .recorder import EventRecorder
 from .sqlite_store import SQLiteEventStore
 
@@ -14,7 +13,6 @@ from .sqlite_store import SQLiteEventStore
 class EventRuntime:
     store: SQLiteEventStore
     recorder: EventRecorder
-    observer: PersistentEventObserver
 
     def close(self) -> None:
         self.store.close()
@@ -46,5 +44,4 @@ def build_event_runtime(
             ),
         )
     recorder = EventRecorder(store, exporters)
-    observer = PersistentEventObserver(recorder)
-    return EventRuntime(store=store, recorder=recorder, observer=observer)
+    return EventRuntime(store=store, recorder=recorder)

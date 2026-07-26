@@ -5,7 +5,6 @@ import asyncio
 from datetime import datetime
 import json
 from pathlib import Path
-import tempfile
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -14,8 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
 
-from schemas.console import (
+from deep_researcher.application import (
+    ApplicationRuntime,
     ResearchCreateRequest,
+    RunApprovalRequest,
+    RunCancellationRequest,
     StudioABComparisonRequest,
     StudioBadcaseCreateRequest,
     StudioReplayApprovalRequest,
@@ -30,17 +32,25 @@ from .service import ResearchConsoleService
 load_dotenv()
 
 
-def create_app(runtime_dir: str = ".console_runtime") -> FastAPI:
-    service = ResearchConsoleService(runtime_dir=runtime_dir)
+def create_app(
+    runtime_dir: str = ".console_runtime",
+    *,
+    runtime: ApplicationRuntime | None = None,
+) -> FastAPI:
+    service = ResearchConsoleService(
+        runtime_dir=runtime_dir,
+        runtime=runtime,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
+            await service.start()
             yield
         finally:
             await service.aclose()
 
-    app = FastAPI(title="DeepResearcher Console", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="DeepResearcher Console", version="1.0.0", lifespan=lifespan)
     app.state.console_service = service
 
     base_dir = Path(__file__).resolve().parent
@@ -58,6 +68,35 @@ def create_app(runtime_dir: str = ".console_runtime") -> FastAPI:
     @app.post("/api/runs")
     async def create_run(payload: ResearchCreateRequest):
         return await service.create_run(payload)
+
+    @app.post("/api/runs/{research_id}/approve")
+    async def approve_run(
+        research_id: str,
+        payload: RunApprovalRequest,
+    ):
+        try:
+            return await service.approve_run(
+                research_id,
+                approved_by=payload.approved_by,
+                note=payload.note,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/runs/{research_id}/cancel")
+    async def cancel_run(
+        research_id: str,
+        payload: RunCancellationRequest,
+    ):
+        try:
+            return await service.cancel_run(
+                research_id,
+                reason=payload.reason,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Run not found") from exc
 
     @app.get("/api/studio/threads")
     async def list_studio_threads(
@@ -650,8 +689,3 @@ def create_app(runtime_dir: str = ".console_runtime") -> FastAPI:
         )
 
     return app
-
-try:
-    app = create_app()
-except Exception:
-    app = create_app(runtime_dir=str(Path(tempfile.gettempdir()) / "mini-deep-research-console"))
