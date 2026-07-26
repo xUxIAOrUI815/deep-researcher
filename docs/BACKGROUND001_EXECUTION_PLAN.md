@@ -131,7 +131,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 10 | `codex/bg001-10-evaluation-lab-core` | integrated | b5834e9 | Five-split datasets, Frozen/Live modes, deterministic/trace metrics, and reproducible baseline experiments complete. |
 | 11 | `codex/bg001-11-evaluation-semantic-gates` | integrated | b9ad3fa | Semantic metrics, calibrated blind judging, release gates, and immutable version promotion/rollback complete. |
 | 12 | `codex/bg001-12-studio-v2` | integrated | e363823 | Read-only paginated Task/Evidence graphs, event-rebuilt state diffs, recovery/resource/version views, snapshot navigation, and Studio UI complete. |
-| 13 | `codex/bg001-13-studio-v3-v4` | pending | | |
+| 13 | `codex/bg001-13-studio-v3-v4` | feature complete | pending merge | Immutable AgentKernel replay/fork, fresh approvals, aligned A/B, component diff, badcase provenance, durable recovery, APIs and Studio V4 UI complete. |
 | 14 | `codex/bg001-14-offline-evolution` | pending | | |
 | 15 | `codex/bg001-15-integration-hardening` | pending | | |
 
@@ -1193,4 +1193,62 @@ Remaining risks: Branch 13 must build immutable replay/fork, saved-result versus
   14 owns offline structured candidate optimization and selection. Branch 15
   still owns production entry-point migration, removal of transitional draft
   paths, and stress/security hardening.
+```
+
+### Branch 13 execution record
+
+```text
+Branch: codex/bg001-13-studio-v3-v4
+Started from integration commit: 8315c91
+Scope delivered: Immutable ReplayCapsule capture and eligibility over exact
+  durable span subtrees; explicit saved-tool-result and live-environment modes;
+  real AgentKernel execution into distinct immutable target runs; sealed model,
+  tool and verification cassettes with new run-local ToolResult aliases and
+  exact network-free enforcement; immutable component selection with Version
+  Registry validation; failed-span and root-run-span restart; request-scoped
+  preflight and dynamically discovered side-effect reapproval; labeled live
+  bindings with exact or explicitly incomplete network accounting; checksummed
+  WAL replay request/approval/attempt journal, rebuildable projection, atomic
+  claim, cursor pagination, restart recovery into a new run, online backup and
+  corruption audit; same-DatasetSample A/B snapshots for runs/spans, Task DAG,
+  evidence graph, components, metrics, cost, latency and convergence with event
+  and read-model fingerprints; immutable Prompt/Skill/Tool/Stop/Verification
+  Policy line diffs; provenance-complete badcases with evaluation-ID-to-artifact
+  validation; typed FastAPI preparation/detail/approval/execution/comparison/
+  diff/badcase surfaces; and a responsive Studio V4 control UI.
+Boundary check: Source events and artifacts are never rewritten; every replay
+  attempt receives a new run and a crash or approval stop is retained rather
+  than resumed in place. Saved side effects consume only sealed observations
+  and are never executed. Live execution requires injected governed bindings
+  and an explicit label. A/B artifacts set publishes_versions=false; badcases
+  set triggers_change=false and optimizer_invoked=false. No candidate patch,
+  optimizer, release transition, online self-modification, production entry
+  point migration, compatibility layer, RL work, or hidden chain-of-thought
+  exposure was added.
+Tests: 302 passed in normal order and 302 passed with test files in reverse
+  order on the feature branch. Eighty-one combined Studio, evaluation, event,
+  artifact, scheduler and Tool Gateway cases passed in both orders. Five dense
+  Branch-13 scenarios cover saved/live/dynamic-approval execution, durability,
+  A/B/diff/badcase boundaries and HTTP/UI surfaces. Python compilation,
+  desktop browser interaction, root-span error feedback, console-log audit and
+  375px responsive visual/layout inspection passed. Only upstream
+  websockets/uvicorn deprecation warnings remain.
+Failure/recovery tests: Missing/stale replay capsules, nonterminal and root run
+  spans, exact subtree fingerprinting, source-run immutability, failed-span
+  gating, sealed model/version mismatch, missing preflight approval, newly
+  generated side-effect reapproval, approval-stop run retention, distinct
+  follow-up run, live-label and saved-network checks, concurrent atomic claims,
+  worker-restart abandonment/requeue, projection deletion/rebuild, projection
+  checksum corruption, append-only trigger enforcement, cursor pagination,
+  backup/reopen, aligned and deliberately misaligned dataset samples,
+  evaluation-ID mismatch, unsupported component diff and immutable HTTP
+  mutation rejection are covered.
+Integration merge commit: pending
+Remote push: pending
+Remaining risks: Branch 14 must consume scored traces, evaluations and these
+  inert badcases to generate bounded offline candidate patches and pass strict
+  selection/release gates. Branch 15 still owns production entry-point
+  migration, removal of transitional draft paths, and complete stress/security
+  hardening. Studio intentionally reports legacy runs without ReplayCapsule
+  material as inspectable but ineligible instead of fabricating replay inputs.
 ```

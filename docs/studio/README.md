@@ -9,3 +9,12 @@ The projection includes terminal state, component versions, input/output/state a
 HTTP surfaces under `/api/studio` provide thread/run catalogs, span queries, timeline filtering and text search, stable `after_sequence` pagination, SSE streaming, and complete JSON or NDJSON trace export. The Console timeline uses these projections and exposes searchable pages plus full event details. Long traces are never truncated in storage or export.
 
 Studio V1 intentionally does not implement task-DAG, evidence-graph, state-diff, replay, fork, A/B, or badcase behavior; those belong to later Background001 branches.
+
+Later Studio contracts are documented separately:
+
+- [Studio V2](../BACKGROUND001_STUDIO_V2.md) adds read-only Task DAG,
+  evidence graph, event-rebuilt state diff, error/retry, component, metric, and
+  snapshot navigation views.
+- [Studio V3/V4](../STUDIO_V4_REPLAY_AND_COMPARISON.md) adds immutable
+  replay/fork, failed-span restart, fresh side-effect approval, aligned A/B,
+  Prompt/Skill/Policy diff, and provenance-complete badcase creation.

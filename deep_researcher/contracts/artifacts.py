@@ -48,6 +48,10 @@ class ArtifactKind(str, Enum):
     REPORT_LOOP_DECISION = "report_loop_decision"
     TRACE_EXPORT = "trace_export"
     STATE_PATCH = "state_patch"
+    REPLAY_CAPSULE = "replay_capsule"
+    STUDIO_REPLAY_RESULT = "studio_replay_result"
+    STUDIO_COMPARISON = "studio_comparison"
+    BADCASE = "badcase"
     OTHER = "other"
 
 
