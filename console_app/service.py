@@ -13,14 +13,19 @@ from core.observability import get_observer, set_observer
 from core.run_context import RunContext
 from core.session_knowledge import KnowledgeManager
 from core.session_retrieval import SessionRetrievalService
+from deep_researcher.artifacts import SQLiteArtifactStore
 from deep_researcher.events import EventRecorder, PersistentEventObserver, SQLiteEventStore
+from deep_researcher.knowledge import KnowledgeRepository, SQLiteKnowledgeStorage
+from deep_researcher.orchestration import SQLiteSchedulerStore
 from deep_researcher.studio import (
     SQLiteStudioProjectionStore,
     StudioProjectionExporter,
     StudioProjector,
+    StudioV2Service,
     TimelineQuery,
     normalize_projection_id,
 )
+from deep_researcher.version_registry import SQLiteVersionRegistryStore
 from schemas.console import (
     ActiveAgentSummary,
     ConsoleRunSummary,
@@ -71,6 +76,28 @@ class ResearchConsoleService:
         self.event_store = SQLiteEventStore(self.runtime_dir / "events.sqlite3")
         self.studio_store = SQLiteStudioProjectionStore(self.runtime_dir / "studio_projection.sqlite3")
         self.studio_projector = StudioProjector(self.event_store, self.studio_store)
+        self.bg001_artifact_store = SQLiteArtifactStore(
+            self.runtime_dir / "bg001_artifacts.sqlite3"
+        )
+        self.bg001_knowledge_storage = SQLiteKnowledgeStorage(
+            self.runtime_dir / "bg001_knowledge.sqlite3",
+            artifact_store=self.bg001_artifact_store,
+        )
+        self.bg001_scheduler_store = SQLiteSchedulerStore(
+            self.runtime_dir / "bg001_scheduler.sqlite3"
+        )
+        self.bg001_version_store = SQLiteVersionRegistryStore(
+            self.runtime_dir / "bg001_version_registry.sqlite3"
+        )
+        self.studio_v2 = StudioV2Service(
+            event_store=self.event_store,
+            scheduler_store=self.bg001_scheduler_store,
+            knowledge_repository=KnowledgeRepository(
+                self.bg001_knowledge_storage
+            ),
+            artifact_store=self.bg001_artifact_store,
+            version_store=self.bg001_version_store,
+        )
         self.event_recorder = EventRecorder(
             self.event_store, (StudioProjectionExporter(self.studio_store),)
         )
@@ -136,6 +163,10 @@ class ResearchConsoleService:
         self.knowledge_manager.close()
         if get_observer() is self.observer:
             set_observer(self._previous_observer)
+        self.bg001_version_store.close()
+        self.bg001_scheduler_store.close()
+        self.bg001_knowledge_storage.close()
+        self.bg001_artifact_store.close()
         self.studio_store.close()
         self.event_store.close()
 
@@ -296,6 +327,114 @@ class ResearchConsoleService:
 
     def export_studio_trace(self, run_id: str) -> dict[str, Any]:
         return self.studio_projector.export_trace(run_id)
+
+    def get_studio_v2_task_graph(
+        self,
+        run_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 100,
+        statuses: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        return self.studio_v2.task_graph(
+            run_id,
+            cursor=cursor,
+            limit=limit,
+            statuses=statuses,
+        ).model_dump(mode="json")
+
+    def get_studio_v2_evidence_graph(
+        self,
+        run_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 100,
+        entity_types: tuple[str, ...] = (),
+        statuses: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "cursor": cursor,
+            "limit": limit,
+            "statuses": statuses,
+        }
+        if entity_types:
+            options["entity_types"] = entity_types
+        return self.studio_v2.evidence_graph(
+            run_id,
+            **options,
+        ).model_dump(mode="json")
+
+    def get_studio_v2_state_diff(
+        self,
+        run_id: str,
+        *,
+        domain: str,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        if domain == "scheduler":
+            page = self.studio_v2.scheduler_state_diffs(
+                run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        elif domain == "evidence":
+            page = self.studio_v2.evidence_state_diffs(
+                run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        else:
+            raise ValueError("domain must be scheduler or evidence")
+        return page.model_dump(mode="json")
+
+    def get_studio_v2_errors(
+        self,
+        run_id: str,
+        *,
+        domain: str = "runtime",
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        if domain == "runtime":
+            page = self.studio_v2.error_retry_chain(
+                run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        elif domain == "scheduler":
+            page = self.studio_v2.scheduler_error_retry_chain(
+                run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        else:
+            raise ValueError("domain must be runtime or scheduler")
+        return page.model_dump(mode="json")
+
+    def get_studio_v2_conflicts(
+        self,
+        run_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        statuses: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        return self.studio_v2.conflict_navigation(
+            run_id,
+            cursor=cursor,
+            limit=limit,
+            statuses=statuses,
+        ).model_dump(mode="json")
+
+    def get_studio_v2_components(self, run_id: str) -> list[dict[str, Any]]:
+        return [
+            item.model_dump(mode="json")
+            for item in self.studio_v2.component_versions(run_id)
+        ]
+
+    def get_studio_v2_metrics(self, run_id: str) -> dict[str, Any]:
+        return self.studio_v2.metrics(run_id).model_dump(mode="json")
 
     async def list_runs(self) -> List[Dict[str, Any]]:
         rows = self.knowledge_manager.store.conn.execute(

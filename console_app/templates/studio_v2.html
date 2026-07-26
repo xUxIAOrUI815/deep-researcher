@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DeepResearcher Studio V2</title>
+  <link rel="stylesheet" href="/static/studio_v2.css" />
+</head>
+<body data-run-id="{{ studio_run_id }}">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">READ-ONLY RUNTIME INSPECTOR</p>
+      <h1>Studio V2</h1>
+    </div>
+    <div class="run-chip">
+      <span>Run</span>
+      <code id="run-id">{{ studio_run_id }}</code>
+    </div>
+  </header>
+
+  <main>
+    <section class="metric-strip" id="metric-strip" aria-label="运行指标"></section>
+
+    <nav class="tabs" aria-label="Studio 视图">
+      <button class="tab active" data-view="tasks">Task DAG</button>
+      <button class="tab" data-view="evidence">Evidence Graph</button>
+      <button class="tab" data-view="diffs">State Diff</button>
+      <button class="tab" data-view="errors">Errors & Retries</button>
+      <button class="tab" data-view="conflicts">Conflicts</button>
+      <button class="tab" data-view="components">Components</button>
+    </nav>
+
+    <section class="workspace">
+      <div class="canvas-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow" id="view-kicker">ORCHESTRATION</p>
+            <h2 id="view-title">Task DAG</h2>
+          </div>
+          <div class="panel-actions">
+            <button id="load-more" class="secondary" hidden>加载下一页</button>
+            <button id="refresh-view" class="secondary">刷新</button>
+          </div>
+        </div>
+        <div id="view-root" class="view-root" aria-live="polite"></div>
+      </div>
+
+      <aside class="detail-panel">
+        <p class="eyebrow">PROVENANCE</p>
+        <h2>节点详情</h2>
+        <div id="detail-root" class="detail-empty">
+          选择任一节点、边、差异或错误，即可查看其字段和可追溯事件/制品。
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script type="module" src="/static/studio_v2.js"></script>
+</body>
+</html>
