@@ -85,7 +85,7 @@ def test_studio_http_filters_streams_and_exports_trace(tmp_path: Path):
                 summary = client.get(
                     f"/api/runs/{created['research_id']}/console"
                 ).json()
-                if summary["status"] in {
+                if summary["runtime"]["status"] in {
                     "completed",
                     "failed",
                     "cancelled",
@@ -93,8 +93,9 @@ def test_studio_http_filters_streams_and_exports_trace(tmp_path: Path):
                     break
                 time.sleep(0.01)
             assert summary is not None
-            assert summary["status"] == "completed"
-            run_id = summary["run_metadata"]["run_id"]
+            assert summary["schema_version"] == "ConsoleWorkspace@2"
+            assert summary["runtime"]["status"] == "completed"
+            run_id = summary["identity"]["run_id"]
             threads = client.get("/api/studio/threads").json()
             runs = client.get(
                 "/api/studio/runs",

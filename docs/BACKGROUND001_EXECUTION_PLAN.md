@@ -111,7 +111,8 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
   |-- 03 + 07 + 08 + 09 -- 12 Studio V2
   |-- 11 + 12 -- 13 Studio V3/V4
   |-- 11 + 13 -- 14 Offline Evolution
-  `-- all branches -- 15 Integration/Hardening
+  |-- all branches -- 15 Integration/Hardening
+  `-- 15 -- 16 Console Runtime Alignment
 ```
 
 ## Branch status
@@ -134,6 +135,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 13 | `codex/bg001-13-studio-v3-v4` | integrated | b537426 | Immutable AgentKernel replay/fork, fresh approvals, aligned A/B, component diff, badcase provenance, durable recovery, APIs and Studio V4 UI complete. |
 | 14 | `codex/bg001-14-offline-evolution` | integrated | 80dbde8 | Reviewed trace/badcase/evaluation pool, bounded structured patches, strict gated selection, rejected-edit memory, human release, best_skill and rollback complete. |
 | 15 | `codex/bg001-15-integration-hardening` | integrated | c241efc | Production composition, draft removal, native-scheduler ADR, full recovery/security/stress gates, and capability-boundary documentation complete. |
+| 16 | `codex/bg001-16-console-runtime-alignment` | complete; integration pending | pending | Complete root Console projection, operational workspace, report lifecycle, actions, accessibility, and browser/API contract alignment. |
 
 ## 00 - Foundation contracts and baseline
 
@@ -575,6 +577,46 @@ Final gate:
 - All seven Background001 architecture layers, four loops, five roles, protocol
   adapters, Studio V1-V4, Frozen/Live evaluation, release gates, and offline
   evolution are fully implemented and exercised end to end.
+
+## 16 - Console runtime alignment
+
+Branch: `codex/bg001-16-console-runtime-alignment`
+
+Complete deliverables:
+
+- Replace the draft root Console with a complete operational workspace aligned
+  to the production ApplicationRuntime, native scheduler, five roles,
+  independent verification, reporting loop, and Studio projections.
+- Add the versioned typed `ConsoleWorkspace@2` projection for identity,
+  runtime, actions, scheduler, tasks, evidence readiness, reporting lifecycle,
+  timeline, and exact-run Studio navigation.
+- Implement every queued/running/approval/reporting/completed/failed/cancelled
+  state, visibility-aware polling, approve/cancel flows, retry handling, and
+  preservation of the last good view.
+- Implement complete landing, run overview, task DAG/inspector, evidence,
+  report, and timeline workspaces with responsive and accessible interaction.
+- Expose report revisions, reviewer scores/findings/repairs, terminal outcome,
+  citation metadata, verified writer packets, sources, coverage gaps, high
+  impact blockers, severe conflicts, task budgets, leases, artifacts, and
+  errors.
+- Add typed projection/API tests, JavaScript module and interaction tests,
+  security/accessibility/responsive checks, deterministic end-to-end browser
+  validation, and full integration regression coverage.
+
+Boundary:
+
+- No change to runtime/scheduler/evidence/reporting decisions, Studio replay or
+  evaluation/evolution semantics, provider policy, release process, or RL.
+- No compatibility facade for the draft Console response and no duplication of
+  advanced Studio mutation workflows.
+
+Merge gate:
+
+- Every production run state and five-role stage is represented correctly;
+  approve/cancel and polling are fenced by backend action availability; task,
+  evidence, coverage, report, timeline and Studio links resolve to the exact
+  run; payloads are escaped and Markdown is allowlisted; desktop/tablet/mobile
+  browser checks and the full normal/reverse test suites pass.
 
 ## Execution records
 
@@ -1375,4 +1417,56 @@ Remaining risks: Live output quality and availability depend on configured
   evaluation and release gates rather than claimed. RL remains explicitly out
   of scope. The two test warnings are upstream websocket API deprecations and
   do not affect current MCP protocol behavior.
+```
+
+### Branch 16 execution record
+
+```text
+Branch: codex/bg001-16-console-runtime-alignment
+Started from integration commit: fd6130a
+Scope delivered: Versioned typed ConsoleRunListItem@2,
+  ConsoleWorkspace@2 and ReportWorkspace@2 read contracts assembled from
+  ApplicationRuntime, native Scheduler, Knowledge, Reporting, Artifact and
+  Studio public projections; complete identity, stage, five-role progress,
+  action availability, task DAG/inspector, budgets, leases, attempts,
+  approvals, errors and artifact visibility; section coverage, blockers,
+  verified Writer packets, citations, governed sources, gaps and conflicts;
+  report outline, revisions, eight-dimension review, findings, bounded repairs
+  and terminal outcome; exact-run Studio/timeline/export navigation; provider
+  readiness and response security headers; a complete same-origin no-build
+  landing, operational Console and safe-Markdown report workspace with
+  accessible dialogs, focus, reduced-motion, print and desktop/tablet/mobile
+  layouts; visibility-aware polling, last-good-view recovery, filtering,
+  pagination, approve/cancel actions and explicit failed/cancelled/not-found
+  states. Cancellation reasons now remain available before scheduler creation,
+  approval actor IDs are validated at both browser and HTTP boundaries, and
+  the typed non-empty run catalog serializes through FastAPI correctly.
+Boundary check: No Supervisor planning, Worker search/extraction, Evidence
+  verification conclusion, Writer prose, Reviewer scoring, Scheduler
+  transition, Studio replay/comparison, Evaluation, Evolution, provider
+  policy, release or RL semantics changed. The Console is projection-only,
+  contains no draft-response compatibility facade, duplicates no advanced
+  Studio mutation workflow, and exposes no hidden reasoning.
+Tests: 259 passed in normal order and 259 passed with test files in reverse
+  order; 26 focused Console/Application/Studio cases passed; JavaScript syntax
+  validation and Python compilation passed. Safe Markdown, external/internal
+  URL policy, schema normalization, polling, filtering, namespaced actor
+  identity, accessibility, reduced-motion, responsive breakpoints and print
+  contracts are covered.
+Failure/recovery tests: Browser checks covered provider-not-configured landing,
+  a retained/redacted failed live run, completed deterministic run, task,
+  evidence, report and filtered error timeline views, approval pause/resume
+  through report revision r1, cancellation from approval with retained reason,
+  and return to a non-empty durable run catalog. API tests cover empty and
+  non-empty catalogs, missing runs, approval/cancel action availability,
+  invalid approval actor and blank cancel input rejection, queued
+  cancellation, failure redaction, terminal action fencing, security headers
+  and exact Console/Report/Studio links. Polling preserves the last good
+  projection and exposes bounded retry after request failure.
+Integration merge commit: pending
+Remote push: pending
+Remaining risks: Live research still requires configured model and search
+  provider credentials; the Console reports that boundary instead of
+  fabricating results. The two suite warnings are upstream websocket API
+  deprecations and do not affect current MCP behavior.
 ```

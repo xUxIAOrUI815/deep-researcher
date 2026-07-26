@@ -1,20 +1,46 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from deep_researcher.application import (
-    ActiveAgentSummary,
     ApplicationRunRecord,
     ApplicationRuntime,
-    ConsoleRunSummary,
-    ContextPanelSummary,
+    ConsoleActionsView,
+    ConsoleApprovalView,
+    ConsoleCitationView,
+    ConsoleConflictView,
+    ConsoleCoverageView,
+    ConsoleEvidencePacketView,
+    ConsoleEvidenceView,
+    ConsoleGapView,
+    ConsoleIdentityView,
+    ConsoleNavigationView,
+    ConsoleProgressStep,
+    ConsoleRepairActionView,
+    ConsoleReportingView,
+    ConsoleReportOutcomeView,
+    ConsoleRevisionView,
+    ConsoleReviewFindingView,
+    ConsoleReviewScoreView,
+    ConsoleReviewView,
+    ConsoleRoleView,
+    ConsoleRunListItem,
+    ConsoleRuntimeView,
+    ConsoleSchedulerView,
+    ConsoleSectionView,
+    ConsoleSourceView,
+    ConsoleTaskView,
+    ConsoleVerifiedClaimView,
+    ConsoleWorkspaceResponse,
     DebugViewResponse,
     KnowledgeSummary,
-    ReportViewResponse,
+    ReportWorkspaceResponse,
     ResearchCreateRequest,
     ResearchCreateResponse,
     TimelineEventSummary,
@@ -148,262 +174,239 @@ class ResearchConsoleService:
         if self._owns_runtime:
             await self.runtime.aclose()
 
-    async def list_runs(self) -> list[dict[str, Any]]:
+    def system_status(self) -> dict[str, Any]:
+        model_configured = bool(os.getenv("DEEPSEEK_API_KEY", "").strip())
+        search_providers = {
+            "tavily": bool(os.getenv("TAVILY_API_KEY", "").strip()),
+            "exa": bool(os.getenv("EXA_API_KEY", "").strip()),
+        }
+        return {
+            "status": "ok",
+            "runtime": "Background001NativeRuntime",
+            "console_schema_version": "ConsoleWorkspace@2",
+            "live_providers": {
+                "model_configured": model_configured,
+                "search_configured": any(search_providers.values()),
+                "search_providers": search_providers,
+                "scraper_mode": os.getenv(
+                    "RESEARCHER_SCRAPER_MODE",
+                    "live",
+                ).strip()
+                or "live",
+            },
+        }
+
+    async def list_runs(self) -> list[ConsoleRunListItem]:
         return [
-            {
-                "research_id": item.research_id,
-                "session_id": item.session_id,
-                "query": item.query,
-                "status": item.status.value,
-                "run_id": item.run_id,
-                "current_round": self._current_round(item.run_id),
-                "updated_at": item.updated_at.isoformat(),
-                "console_url": f"/console/{item.research_id}",
-                "report_url": f"/report/{item.research_id}",
-            }
+            ConsoleRunListItem(
+                research_id=item.research_id,
+                run_id=item.run_id,
+                session_id=item.session_id,
+                query=item.query,
+                depth=item.depth,
+                status=item.status.value,
+                current_stage=item.current_stage,
+                current_round=self._current_round(item.run_id),
+                has_report=item.report_artifact_id is not None,
+                resumed=item.resumed,
+                created_at=item.created_at.isoformat(),
+                updated_at=item.updated_at.isoformat(),
+                console_url=f"/console/{item.research_id}",
+                report_url=f"/report/{item.research_id}",
+            )
             for item in self.runtime.application_store.list(limit=100)
         ]
 
-    async def get_console_summary(
+    async def get_console_workspace(
         self,
         research_id: str,
-    ) -> ConsoleRunSummary:
+    ) -> ConsoleWorkspaceResponse:
         record = self._record(research_id)
         try:
             snapshot = await self.runtime.scheduler.snapshot(record.run_id)
-            task_records = snapshot.tasks
+            task_records = tuple(snapshot.tasks)
         except KeyError:
             snapshot = None
             task_records = ()
+
         repository = self.runtime.knowledge_repository
-        sources = repository.sources.list(record.run_id)
-        claims = repository.claims.list(record.run_id)
-        facts = repository.facts.list(record.run_id)
-        evidence = repository.evidence.list(record.run_id)
-        conflicts = repository.conflicts.list(record.run_id)
-        sections = sorted(
-            repository.sections.list(record.run_id),
-            key=lambda item: (item.order, item.section_id),
+        sources = tuple(repository.sources.list(record.run_id))
+        claims = tuple(repository.claims.list(record.run_id))
+        facts = tuple(repository.facts.list(record.run_id))
+        evidence_records = tuple(repository.evidence.list(record.run_id))
+        conflicts = tuple(repository.conflicts.list(record.run_id))
+        sections = tuple(
+            sorted(
+                repository.sections.list(record.run_id),
+                key=lambda item: (item.order, item.section_id),
+            )
         )
         report = repository.reports.get(record.report_id)
         decisions = self.runtime.research_store.convergence_decisions(
             record.run_id
         )
         latest_decision = decisions[-1] if decisions else None
-        active = next(
-            (
-                item
-                for item in task_records
-                if item.envelope.status
-                in {
-                    TaskStatus.RUNNING,
-                    TaskStatus.WAITING_APPROVAL,
-                    TaskStatus.READY,
-                }
+        timeline = tuple(self._timeline(record.run_id))
+        active = self._active_task(task_records)
+        task_views = self._task_views(task_records)
+        approval_views = tuple(
+            task.approval
+            for task in task_views
+            if task.approval is not None
+            and task.status == TaskStatus.WAITING_APPROVAL.value
+        )
+        roles, active_role_id = self._role_views(
+            record=record,
+            active_task=active,
+            timeline=timeline,
+            decision_summary=(
+                "; ".join(latest_decision.reasons)
+                if latest_decision is not None
+                else ""
             ),
-            None,
         )
-        task_tree = {
-            item.task_id: {
-                **item.envelope.model_dump(mode="json"),
-                "lease_owner": item.lease_owner,
-                "lease_expires_at": (
-                    item.lease_expires_at.isoformat()
-                    if item.lease_expires_at is not None
-                    else None
-                ),
-                "budget_usage": item.budget_usage.model_dump(mode="json"),
-                "result_id": item.result_id,
-                "output_artifact_ids": list(item.output_artifact_ids),
-                "error_ref": item.error_ref,
-            }
-            for item in task_records
-        }
-        outline = {
-            "report_id": record.report_id,
-            "title": report.title if report is not None else record.query,
-            "sections": [
-                {
-                    "section_id": item.section_id,
-                    "title": item.title,
-                    "goal": item.goal,
-                    "order": item.order,
-                    "claim_ids": list(item.claim_ids),
-                    "required_claim_ids": list(item.required_claim_ids),
-                    "coverage_score": item.coverage_score,
-                    "citation_score": item.citation_score,
-                    "coverage_status": item.coverage_status.value,
-                }
-                for item in sections
-            ],
-        }
-        gaps = [
-            {
-                "section_id": item.section_id,
-                "title": item.title,
-                "coverage_status": item.coverage_status.value,
-                "coverage_score": item.coverage_score,
-                "citation_score": item.citation_score,
-                "unsupported_claim_ids": list(item.unsupported_claim_ids),
-            }
-            for item in sections
-            if item.required_claim_ids
-            and item.coverage_status != SectionCoverageStatus.COMPLETE
-        ]
-        packs = self._artifact_payloads(
-            record.run_id,
-            ArtifactKind.EVIDENCE_PACK,
+        progress = self._progress_steps(record, roles)
+        evidence_view = self._evidence_view(
+            record=record,
+            sources=sources,
+            claims=claims,
+            facts=facts,
+            evidence_records=evidence_records,
+            conflicts=conflicts,
+            sections=sections,
+            latest_decision=latest_decision,
         )
-        timeline = self._timeline(record.run_id)
+        reporting_view = self._reporting_view(
+            record=record,
+            report_title=report.title if report is not None else record.query,
+            sections=evidence_view.sections,
+        )
         current_round = latest_decision.cycle + 1 if latest_decision else 0
-        planner_state = (
-            latest_decision.model_dump(mode="json")
-            if latest_decision is not None
-            else {}
-        )
-        active_name = self._active_agent(record.current_stage, active)
-        latest_coverage = (
-            {
-                "required_section_ids": list(
-                    latest_decision.snapshot.required_section_ids
-                ),
-                "complete_section_ids": list(
-                    latest_decision.snapshot.complete_section_ids
-                ),
-                "coverage_gap_section_ids": list(
-                    latest_decision.snapshot.coverage_gap_section_ids
-                ),
-                "blocked_high_impact_claim_ids": list(
-                    latest_decision.snapshot.blocked_high_impact_claim_ids
-                ),
-                "severe_conflict_ids": list(
-                    latest_decision.snapshot.severe_conflict_ids
-                ),
-            }
-            if latest_decision is not None
-            else None
-        )
-        context = ContextPanelSummary(
-            planner={
-                "required_sections": (
-                    list(latest_decision.snapshot.required_section_ids)
-                    if latest_decision
-                    else []
-                ),
-                "gap_count": len(gaps),
-                "conflict_count": len(conflicts),
-                "decision": (
-                    latest_decision.action.value if latest_decision else None
-                ),
-            },
-            researcher={
-                "source_count": len(sources),
-                "candidate_claim_count": len(claims),
-                "task_count": len(task_records),
-                "active_task_id": active.task_id if active else None,
-            },
-            writer={
-                "verified_claim_count": len(
-                    [
-                        item
-                        for item in claims
-                        if item.status.value == "supported"
-                    ]
-                ),
-                "section_count": len(sections),
-                "report_artifact_id": record.report_artifact_id,
-            },
-        )
         elapsed = max(
             0.0,
             (datetime.now(timezone.utc) - record.created_at).total_seconds(),
         )
-        return ConsoleRunSummary(
-            research_id=record.research_id,
-            thread_id=record.thread_id,
-            session_id=record.session_id,
-            query=record.query,
-            status=record.status.value,
-            current_stage=record.current_stage,
-            current_round=current_round,
-            elapsed_seconds=elapsed,
-            resumed=record.resumed,
-            has_report=record.report_artifact_id is not None,
-            root_task_id=record.root_task_id,
-            active_task_id=active.task_id if active else None,
-            planner_state=planner_state,
-            report_outline=outline,
-            task_tree=task_tree,
+        terminal = record.status.value in {
+            "completed",
+            "failed",
+            "cancelled",
+        }
+        waiting_ids = tuple(item.task_id for item in approval_views)
+        scheduler_counts = Counter(item.status for item in task_views)
+
+        return ConsoleWorkspaceResponse(
+            identity=ConsoleIdentityView(
+                research_id=record.research_id,
+                thread_id=record.thread_id,
+                session_id=record.session_id,
+                run_id=record.run_id,
+                trace_id=record.trace_id,
+                root_task_id=record.root_task_id,
+                report_id=record.report_id,
+                query=record.query,
+                instructions=record.instructions,
+                depth=record.depth,
+                created_at=record.created_at.isoformat(),
+                updated_at=record.updated_at.isoformat(),
+                resumed=record.resumed,
+                has_report=record.report_artifact_id is not None,
+            ),
+            runtime=ConsoleRuntimeView(
+                status=record.status.value,
+                current_stage=record.current_stage,
+                current_round=current_round,
+                elapsed_seconds=elapsed,
+                active_role_id=active_role_id,
+                active_task_id=active.task_id if active is not None else None,
+                decision=(
+                    latest_decision.action.value
+                    if latest_decision is not None
+                    else None
+                ),
+                decision_reasons=(
+                    tuple(latest_decision.reasons)
+                    if latest_decision is not None
+                    else ()
+                ),
+                error_code=record.error_code,
+                error_message=record.error_message,
+                progress=progress,
+                roles=roles,
+            ),
+            actions=ConsoleActionsView(
+                terminal=terminal,
+                can_approve=(
+                    record.status.value == "waiting_approval"
+                    and bool(approval_views)
+                ),
+                can_cancel=record.status.value
+                in {"queued", "running", "waiting_approval"},
+                waiting_approval_task_ids=waiting_ids,
+                approvals=approval_views,
+            ),
+            scheduler=ConsoleSchedulerView(
+                status=(
+                    snapshot.control.status.value
+                    if snapshot is not None
+                    else "not_created"
+                ),
+                projection_revision=(
+                    snapshot.control.projection_revision
+                    if snapshot is not None
+                    else 0
+                ),
+                max_concurrency=(
+                    snapshot.control.max_concurrency
+                    if snapshot is not None
+                    else 0
+                ),
+                cancellation_reason=(
+                    snapshot.control.cancellation_reason
+                    if snapshot is not None
+                    else record.metadata.get("cancellation_reason")
+                ),
+                task_counts=dict(sorted(scheduler_counts.items())),
+                active_task_ids=tuple(
+                    item.task_id
+                    for item in task_views
+                    if item.status == TaskStatus.RUNNING.value
+                ),
+                ready_task_ids=tuple(
+                    item.task_id
+                    for item in task_views
+                    if item.status == TaskStatus.READY.value
+                ),
+                waiting_approval_task_ids=waiting_ids,
+                tasks=task_views,
+            ),
+            evidence=evidence_view,
+            reporting=reporting_view,
             timeline=timeline,
-            knowledge_summary=KnowledgeSummary(
-                source_count=len(sources),
-                claim_count=len(claims),
-                fact_count=len(facts),
-                evidence_count=len(evidence),
-                conflict_count=len(conflicts),
-                open_gap_count=len(gaps),
-                section_pack_count=len(packs),
-            ),
-            latest_coverage_snapshot=latest_coverage,
-            open_gaps=gaps,
-            conflicts=[
-                item.model_dump(mode="json") for item in conflicts
-            ],
-            section_packs=packs,
-            sources=[item.model_dump(mode="json") for item in sources],
-            active_agent=ActiveAgentSummary(
-                name=active_name,
-                status=record.current_stage,
-                target=active.envelope.title if active else "",
-                last_output_summary=(
-                    "; ".join(latest_decision.reasons)
-                    if latest_decision
-                    else ""
-                )[:240],
-            ),
-            context_summary=context,
-            run_metadata={
-                **record.model_dump(mode="json"),
-                "scheduler_status": (
-                    snapshot.control.status.value if snapshot else "not_created"
-                ),
-                "projection_revision": (
-                    snapshot.control.projection_revision if snapshot else 0
-                ),
-            },
+            navigation=self._navigation(record),
         )
 
-    async def get_report_view(self, research_id: str) -> ReportViewResponse:
-        summary = await self.get_console_summary(research_id)
+    async def get_report_view(
+        self,
+        research_id: str,
+    ) -> ReportWorkspaceResponse:
+        workspace = await self.get_console_workspace(research_id)
         record = self._record(research_id)
         markdown = ""
         if record.report_artifact_id is not None:
             markdown = self.runtime.artifact_store.read_bytes(
                 record.report_artifact_id
             ).decode("utf-8")
-        revisions = self.runtime.reporting_store.revisions(
-            record.run_id,
-            record.report_id,
-        )
-        latest = revisions[-1].model_dump(mode="json") if revisions else {}
-        return ReportViewResponse(
-            research_id=record.research_id,
-            session_id=record.session_id,
-            query=record.query,
-            status=record.status.value,
-            title=str(summary.report_outline.get("title") or record.query),
+        return ReportWorkspaceResponse(
+            identity=workspace.identity,
+            runtime=workspace.runtime,
+            evidence=workspace.evidence,
+            reporting=workspace.reporting,
             markdown=markdown,
-            outline=summary.report_outline,
-            report=latest,
-            knowledge_summary=summary.knowledge_summary,
-            latest_coverage_snapshot=summary.latest_coverage_snapshot,
-            open_gaps=summary.open_gaps,
-            section_packs=summary.section_packs,
-            context_summary=summary.context_summary,
+            navigation=workspace.navigation,
         )
 
     async def get_debug_view(self, research_id: str) -> DebugViewResponse:
-        summary = await self.get_console_summary(research_id)
+        workspace = await self.get_console_workspace(research_id)
         record = self._record(research_id)
         run = self.get_studio_run(record.run_id)
         spans = self.list_studio_spans(
@@ -422,18 +425,797 @@ class ResearchConsoleService:
                 "terminal_event_id": run.get("terminal_event_id"),
                 "application_revision": record.revision,
             },
-            context_summary=summary.context_summary,
-            trace=summary.timeline,
+            context_summary={
+                "runtime": workspace.runtime.model_dump(mode="json"),
+                "scheduler": {
+                    "status": workspace.scheduler.status,
+                    "projection_revision": (
+                        workspace.scheduler.projection_revision
+                    ),
+                    "task_counts": workspace.scheduler.task_counts,
+                },
+                "evidence": (
+                    workspace.evidence.knowledge.model_dump(mode="json")
+                ),
+                "reporting": {
+                    "revision_count": workspace.reporting.revision_count,
+                    "artifact_ready": workspace.reporting.artifact_ready,
+                },
+            },
+            trace=list(workspace.timeline),
             raw_state={
                 "projection_schema": "StudioProjection@1",
+                "console_schema": workspace.schema_version,
                 "run": run,
                 "spans": spans,
             },
             snapshot_summary={
                 "application": record.model_dump(mode="json"),
-                "knowledge": summary.knowledge_summary.model_dump(mode="json"),
-                "coverage": summary.latest_coverage_snapshot or {},
+                "knowledge": (
+                    workspace.evidence.knowledge.model_dump(mode="json")
+                ),
+                "coverage": (
+                    workspace.evidence.coverage.model_dump(mode="json")
+                ),
             },
+        )
+
+    @staticmethod
+    def _active_task(task_records: tuple[Any, ...]) -> Any | None:
+        rank = {
+            TaskStatus.RUNNING: 0,
+            TaskStatus.WAITING_APPROVAL: 1,
+            TaskStatus.READY: 2,
+        }
+        candidates = [
+            item
+            for item in task_records
+            if item.envelope.status in rank
+        ]
+        if not candidates:
+            return None
+        return sorted(
+            candidates,
+            key=lambda item: (
+                rank[item.envelope.status],
+                -item.envelope.priority,
+                item.envelope.created_at,
+                item.task_id,
+            ),
+        )[0]
+
+    @staticmethod
+    def _approval_view(item: Any) -> ConsoleApprovalView | None:
+        approval = item.approval
+        if approval is None:
+            return None
+        return ConsoleApprovalView(
+            approval_id=approval.approval_id,
+            task_id=item.task_id,
+            task_title=item.envelope.title,
+            requested_by=approval.requested_by,
+            reason=approval.reason,
+            status=approval.status.value,
+            requested_at=approval.requested_at.isoformat(),
+            resolved_by=approval.resolved_by,
+            resolution_note=approval.resolution_note,
+            resolved_at=(
+                approval.resolved_at.isoformat()
+                if approval.resolved_at is not None
+                else None
+            ),
+        )
+
+    def _task_views(
+        self,
+        task_records: tuple[Any, ...],
+    ) -> tuple[ConsoleTaskView, ...]:
+        by_id = {item.task_id: item for item in task_records}
+        depth_cache: dict[str, int] = {}
+
+        def depth(task_id: str, lineage: frozenset[str] = frozenset()) -> int:
+            if task_id in depth_cache:
+                return depth_cache[task_id]
+            if task_id in lineage:
+                return 0
+            item = by_id[task_id]
+            parent_id = item.envelope.parent_task_id
+            value = (
+                depth(parent_id, lineage | {task_id}) + 1
+                if parent_id in by_id
+                else 0
+            )
+            depth_cache[task_id] = value
+            return value
+
+        views = [
+            ConsoleTaskView(
+                task_id=item.task_id,
+                parent_task_id=item.envelope.parent_task_id,
+                dependency_task_ids=tuple(
+                    item.envelope.dependency_task_ids
+                ),
+                depth=depth(item.task_id),
+                kind=item.envelope.kind.value,
+                status=item.envelope.status.value,
+                title=item.envelope.title,
+                goal=item.envelope.goal,
+                constraints=dict(item.envelope.constraints),
+                input_artifact_ids=tuple(
+                    item.envelope.input_artifact_ids
+                ),
+                expected_output_schema=(
+                    item.envelope.expected_output_schema
+                ),
+                priority=item.envelope.priority,
+                deadline=(
+                    item.envelope.deadline.isoformat()
+                    if item.envelope.deadline is not None
+                    else None
+                ),
+                attempt=item.envelope.attempt,
+                max_attempts=item.envelope.max_attempts,
+                created_by=item.envelope.created_by,
+                assigned_actor_id=item.envelope.assigned_actor_id,
+                tags=tuple(item.envelope.tags),
+                created_at=item.envelope.created_at.isoformat(),
+                updated_at=item.updated_at.isoformat(),
+                budget=item.envelope.budget.model_dump(mode="json"),
+                budget_usage=item.budget_usage.model_dump(mode="json"),
+                lease_owner=item.lease_owner,
+                lease_expires_at=(
+                    item.lease_expires_at.isoformat()
+                    if item.lease_expires_at is not None
+                    else None
+                ),
+                result_id=item.result_id,
+                output_artifact_ids=tuple(item.output_artifact_ids),
+                error_ref=item.error_ref,
+                merged_into_task_id=item.merged_into_task_id,
+                defer_reason=item.defer_reason,
+                pause_reason=item.pause_reason,
+                approval=self._approval_view(item),
+            )
+            for item in task_records
+        ]
+        return tuple(
+            sorted(
+                views,
+                key=lambda item: (
+                    item.depth,
+                    -item.priority,
+                    item.created_at,
+                    item.task_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _role_id(actor_id: str | None) -> str | None:
+        value = str(actor_id or "").casefold()
+        if "research_supervisor" in value:
+            return "research_supervisor"
+        if "research_worker" in value:
+            return "research_worker_pool"
+        if "evidence_verifier" in value:
+            return "evidence_verifier"
+        if "synthesis_writer" in value:
+            return "synthesis_writer"
+        if "report_reviewer" in value:
+            return "report_reviewer"
+        return None
+
+    @classmethod
+    def _task_role(cls, task: Any | None) -> str | None:
+        if task is None:
+            return None
+        assigned = cls._role_id(task.envelope.assigned_actor_id)
+        if assigned is not None:
+            return assigned
+        tags = {str(item).casefold() for item in task.envelope.tags}
+        if "research_worker" in tags:
+            return "research_worker_pool"
+        return cls._role_id(task.envelope.created_by)
+
+    @classmethod
+    def _role_views(
+        cls,
+        *,
+        record: ApplicationRunRecord,
+        active_task: Any | None,
+        timeline: tuple[TimelineEventSummary, ...],
+        decision_summary: str,
+    ) -> tuple[tuple[ConsoleRoleView, ...], str | None]:
+        definitions = (
+            ("research_supervisor", "Research Supervisor"),
+            ("research_worker_pool", "Research Worker Pool"),
+            ("evidence_verifier", "Evidence Verifier"),
+            ("synthesis_writer", "Synthesis Writer"),
+            ("report_reviewer", "Report Reviewer"),
+        )
+        events: dict[str, list[TimelineEventSummary]] = {
+            role_id: [] for role_id, _ in definitions
+        }
+        completed_spans: set[str] = set()
+        for event in timeline:
+            role_id = cls._role_id(event.actor_id)
+            if role_id is None:
+                continue
+            events[role_id].append(event)
+            if event.event_type in {"span_completed", "span_failed"}:
+                completed_spans.add(role_id)
+
+        status = record.status.value
+        terminal = status in {"completed", "failed", "cancelled"}
+        active_role_id: str | None = None
+        if not terminal:
+            if status == "waiting_approval":
+                active_role_id = cls._task_role(active_task)
+            elif record.current_stage == "researching":
+                candidates = [
+                    event
+                    for event in timeline
+                    if cls._role_id(event.actor_id)
+                    in {
+                        "research_supervisor",
+                        "research_worker_pool",
+                        "evidence_verifier",
+                    }
+                ]
+                active_role_id = (
+                    cls._role_id(candidates[-1].actor_id)
+                    if candidates
+                    else cls._task_role(active_task)
+                    or "research_supervisor"
+                )
+            elif record.current_stage == "reporting":
+                candidates = [
+                    event
+                    for event in timeline
+                    if cls._role_id(event.actor_id)
+                    in {"synthesis_writer", "report_reviewer"}
+                ]
+                active_role_id = (
+                    cls._role_id(candidates[-1].actor_id)
+                    if candidates
+                    else "synthesis_writer"
+                )
+
+        last_role = None
+        observed = [
+            event
+            for event in timeline
+            if cls._role_id(event.actor_id) is not None
+        ]
+        if observed:
+            last_role = cls._role_id(observed[-1].actor_id)
+
+        views: list[ConsoleRoleView] = []
+        for role_id, label in definitions:
+            role_events = events[role_id]
+            last = role_events[-1] if role_events else None
+            if status == "completed":
+                role_status = "completed"
+            elif role_id == active_role_id:
+                role_status = (
+                    "blocked"
+                    if status == "waiting_approval"
+                    else "active"
+                )
+            elif status == "failed" and role_id == last_role:
+                role_status = "failed"
+            elif status == "cancelled" and role_id == last_role:
+                role_status = "cancelled"
+            elif role_events and (
+                role_id in completed_spans
+                or active_role_id is not None
+                or terminal
+            ):
+                role_status = "completed"
+            else:
+                role_status = "waiting"
+            views.append(
+                ConsoleRoleView(
+                    role_id=role_id,
+                    label=label,
+                    status=role_status,
+                    task_id=(
+                        active_task.task_id
+                        if role_id == active_role_id
+                        and active_task is not None
+                        else None
+                    ),
+                    target=(
+                        active_task.envelope.title
+                        if role_id == active_role_id
+                        and active_task is not None
+                        else ""
+                    ),
+                    last_event_sequence=(
+                        last.sequence_no if last is not None else 0
+                    ),
+                    last_event_type=(
+                        last.event_type if last is not None else None
+                    ),
+                    last_output_summary=(
+                        decision_summary[:500]
+                        if role_id == "research_supervisor"
+                        else ""
+                    ),
+                )
+            )
+        return tuple(views), active_role_id
+
+    @staticmethod
+    def _progress_steps(
+        record: ApplicationRunRecord,
+        roles: tuple[ConsoleRoleView, ...],
+    ) -> tuple[ConsoleProgressStep, ...]:
+        role_status = {item.role_id: item.status for item in roles}
+
+        def aggregate(role_ids: tuple[str, ...]) -> str:
+            values = [role_status[item] for item in role_ids]
+            for candidate in ("failed", "cancelled", "blocked", "active"):
+                if candidate in values:
+                    return candidate
+            if values and all(item == "completed" for item in values):
+                return "completed"
+            return "waiting"
+
+        queued_status = (
+            "active"
+            if record.status.value == "queued"
+            else (
+                "cancelled"
+                if record.status.value == "cancelled"
+                and record.current_stage in {"queued", "initializing"}
+                else "completed"
+            )
+        )
+        complete_status = {
+            "completed": "completed",
+            "failed": "failed",
+            "cancelled": "cancelled",
+        }.get(record.status.value, "waiting")
+        return (
+            ConsoleProgressStep(
+                step_id="queued",
+                label="Runtime queued",
+                status=queued_status,
+            ),
+            ConsoleProgressStep(
+                step_id="research",
+                label="Plan and research",
+                status=aggregate(
+                    ("research_supervisor", "research_worker_pool")
+                ),
+                role_ids=(
+                    "research_supervisor",
+                    "research_worker_pool",
+                ),
+            ),
+            ConsoleProgressStep(
+                step_id="verification",
+                label="Independent verification",
+                status=aggregate(("evidence_verifier",)),
+                role_ids=("evidence_verifier",),
+            ),
+            ConsoleProgressStep(
+                step_id="synthesis",
+                label="Evidence-only synthesis",
+                status=aggregate(("synthesis_writer",)),
+                role_ids=("synthesis_writer",),
+            ),
+            ConsoleProgressStep(
+                step_id="review",
+                label="Report review",
+                status=aggregate(("report_reviewer",)),
+                role_ids=("report_reviewer",),
+            ),
+            ConsoleProgressStep(
+                step_id="complete",
+                label="Terminal outcome",
+                status=complete_status,
+            ),
+        )
+
+    def _evidence_view(
+        self,
+        *,
+        record: ApplicationRunRecord,
+        sources: tuple[Any, ...],
+        claims: tuple[Any, ...],
+        facts: tuple[Any, ...],
+        evidence_records: tuple[Any, ...],
+        conflicts: tuple[Any, ...],
+        sections: tuple[Any, ...],
+        latest_decision: Any | None,
+    ) -> ConsoleEvidenceView:
+        section_views = tuple(
+            ConsoleSectionView(
+                section_id=item.section_id,
+                parent_section_id=item.parent_section_id,
+                title=item.title,
+                goal=item.goal,
+                order=item.order,
+                status=item.status.value,
+                coverage_status=item.coverage_status.value,
+                coverage_score=item.coverage_score,
+                citation_score=item.citation_score,
+                claim_ids=tuple(item.claim_ids),
+                required_claim_ids=tuple(item.required_claim_ids),
+                unsupported_claim_ids=tuple(item.unsupported_claim_ids),
+                conflicted_claim_ids=tuple(item.conflicted_claim_ids),
+            )
+            for item in sections
+        )
+        if latest_decision is not None:
+            required_ids = tuple(
+                latest_decision.snapshot.required_section_ids
+            )
+            complete_ids = tuple(
+                latest_decision.snapshot.complete_section_ids
+            )
+            gap_ids = tuple(
+                latest_decision.snapshot.coverage_gap_section_ids
+            )
+            blocked_ids = tuple(
+                latest_decision.snapshot.blocked_high_impact_claim_ids
+            )
+            severe_ids = tuple(
+                latest_decision.snapshot.severe_conflict_ids
+            )
+        else:
+            required_ids = tuple(
+                item.section_id
+                for item in sections
+                if item.required_claim_ids
+            )
+            complete_ids = tuple(
+                item.section_id
+                for item in sections
+                if item.required_claim_ids
+                and item.coverage_status == SectionCoverageStatus.COMPLETE
+            )
+            gap_ids = tuple(
+                item for item in required_ids if item not in complete_ids
+            )
+            blocked_ids = tuple(
+                claim.claim_id
+                for claim in claims
+                if claim.high_impact
+                and claim.status.value != "supported"
+            )
+            severe_ids = tuple(
+                conflict.conflict_id
+                for conflict in conflicts
+                if conflict.status.value == "open"
+                and conflict.severity.value in {"high", "critical"}
+            )
+        required_count = len(required_ids)
+        complete_count = len(complete_ids)
+        ratio = (
+            complete_count / required_count
+            if required_count
+            else (
+                1.0
+                if record.current_stage in {"reporting", "completed"}
+                else 0.0
+            )
+        )
+        gaps = tuple(
+            ConsoleGapView(
+                section_id=item.section_id,
+                section_title=item.title,
+                coverage_status=item.coverage_status.value,
+                coverage_score=item.coverage_score,
+                citation_score=item.citation_score,
+                unsupported_claim_ids=tuple(item.unsupported_claim_ids),
+            )
+            for item in sections
+            if item.required_claim_ids
+            and item.coverage_status != SectionCoverageStatus.COMPLETE
+        )
+        conflict_views = tuple(
+            ConsoleConflictView(
+                conflict_id=item.conflict_id,
+                summary=item.summary,
+                status=item.status.value,
+                severity=item.severity.value,
+                high_impact=item.high_impact,
+                claim_ids=tuple(item.claim_ids),
+                fact_ids=tuple(item.fact_ids),
+                resolution=item.resolution,
+                resolution_kind=(
+                    item.resolution_kind.value
+                    if item.resolution_kind is not None
+                    else None
+                ),
+                resolution_evidence_ids=tuple(
+                    item.resolution_evidence_ids
+                ),
+                updated_at=item.updated_at.isoformat(),
+            )
+            for item in conflicts
+        )
+        packets = self._evidence_packet_views(
+            self._artifact_payloads(
+                record.run_id,
+                ArtifactKind.EVIDENCE_PACK,
+            )
+        )
+        source_views = tuple(
+            ConsoleSourceView(
+                source_id=item.source_id,
+                canonical_url=item.canonical_url,
+                title=item.title,
+                publisher=item.publisher,
+                source_type=item.source_type.value,
+                source_level=item.source_level.value,
+                status=item.status.value,
+                authority_score=item.authority_score,
+                published_at=(
+                    item.published_at.isoformat()
+                    if item.published_at is not None
+                    else None
+                ),
+                discovered_at=item.discovered_at.isoformat(),
+                task_id=item.provenance.task_id,
+            )
+            for item in sources
+        )
+        return ConsoleEvidenceView(
+            knowledge=KnowledgeSummary(
+                source_count=len(sources),
+                claim_count=len(claims),
+                fact_count=len(facts),
+                evidence_count=len(evidence_records),
+                conflict_count=len(conflicts),
+                open_gap_count=len(gaps),
+                section_pack_count=len(packets),
+            ),
+            coverage=ConsoleCoverageView(
+                required_section_ids=required_ids,
+                complete_section_ids=complete_ids,
+                gap_section_ids=gap_ids,
+                blocked_high_impact_claim_ids=blocked_ids,
+                severe_conflict_ids=severe_ids,
+                required_count=required_count,
+                complete_count=complete_count,
+                completion_ratio=ratio,
+                ready_for_reporting=(
+                    complete_count == required_count
+                    and not blocked_ids
+                    and not severe_ids
+                    and (
+                        bool(required_ids)
+                        or record.current_stage
+                        in {"reporting", "completed"}
+                    )
+                ),
+            ),
+            sections=section_views,
+            gaps=gaps,
+            conflicts=conflict_views,
+            packets=packets,
+            sources=source_views,
+        )
+
+    @staticmethod
+    def _evidence_packet_views(
+        payloads: list[dict[str, Any]],
+    ) -> tuple[ConsoleEvidencePacketView, ...]:
+        output: list[ConsoleEvidencePacketView] = []
+        for payload in payloads:
+            packet = payload.get("packet")
+            if not isinstance(packet, dict):
+                continue
+            packet_id = str(packet.get("packet_id") or "")
+            report_id = str(packet.get("report_id") or "")
+            created_at = str(packet.get("created_at") or "")
+            if not packet_id or not report_id or not created_at:
+                continue
+            claims = tuple(
+                ConsoleVerifiedClaimView(
+                    claim_id=str(item.get("claim_id") or ""),
+                    statement=str(item.get("statement") or ""),
+                    importance=float(item.get("importance") or 0.0),
+                    high_impact=bool(item.get("high_impact")),
+                    citation_ids=tuple(item.get("citation_ids") or ()),
+                    source_ids=tuple(item.get("source_ids") or ()),
+                )
+                for item in packet.get("claims") or ()
+                if isinstance(item, dict)
+                and item.get("claim_id")
+                and item.get("statement")
+            )
+            citations = tuple(
+                ConsoleCitationView(
+                    citation_id=str(item.get("citation_id") or ""),
+                    claim_id=str(item.get("claim_id") or ""),
+                    evidence_id=str(item.get("evidence_id") or ""),
+                    source_id=str(item.get("source_id") or ""),
+                    source_title=str(item.get("source_title") or ""),
+                    canonical_url=str(item.get("canonical_url") or ""),
+                    publisher=(
+                        str(item["publisher"])
+                        if item.get("publisher") is not None
+                        else None
+                    ),
+                    locator=str(item.get("locator") or ""),
+                    quote=str(item.get("quote") or ""),
+                )
+                for item in packet.get("citations") or ()
+                if isinstance(item, dict)
+                and item.get("citation_id")
+                and item.get("canonical_url")
+            )
+            output.append(
+                ConsoleEvidencePacketView(
+                    packet_id=packet_id,
+                    artifact_id=(
+                        str(packet["packet_artifact_id"])
+                        if packet.get("packet_artifact_id") is not None
+                        else None
+                    ),
+                    report_id=report_id,
+                    created_at=created_at,
+                    verified_claims=claims,
+                    citations=citations,
+                    section_count=len(packet.get("sections") or ()),
+                    gap_count=len(packet.get("gaps") or ()),
+                    conflict_count=len(packet.get("conflicts") or ()),
+                )
+            )
+        return tuple(
+            sorted(output, key=lambda item: (item.created_at, item.packet_id))
+        )
+
+    def _reporting_view(
+        self,
+        *,
+        record: ApplicationRunRecord,
+        report_title: str,
+        sections: tuple[ConsoleSectionView, ...],
+    ) -> ConsoleReportingView:
+        revisions = self.runtime.reporting_store.revisions(
+            record.run_id,
+            record.report_id,
+        )
+        reviews = self.runtime.reporting_store.reviews(
+            record.run_id,
+            record.report_id,
+        )
+        outcome = self.runtime.reporting_store.outcome(
+            record.run_id,
+            record.report_id,
+        )
+        latest_revision = revisions[-1] if revisions else None
+        latest_review = reviews[-1] if reviews else None
+        citation_count = 0
+        if latest_revision is not None:
+            citation_map = self.runtime.reporting_store.citation_map(
+                record.run_id,
+                record.report_id,
+                latest_revision.revision,
+            )
+            citation_count = (
+                len(citation_map.entries)
+                if citation_map is not None
+                else 0
+            )
+        revision_view = (
+            ConsoleRevisionView(
+                revision_id=latest_revision.revision_id,
+                revision=latest_revision.revision,
+                title=latest_revision.title,
+                parent_revision_id=latest_revision.parent_revision_id,
+                report_artifact_id=latest_revision.report_artifact_id,
+                draft_artifact_id=latest_revision.draft_artifact_id,
+                citation_map_artifact_id=(
+                    latest_revision.citation_map_artifact_id
+                ),
+                evidence_packet_artifact_id=(
+                    latest_revision.evidence_packet_artifact_id
+                ),
+                statement_count=len(latest_revision.statement_ids),
+                citation_count=citation_count,
+                usage=latest_revision.usage.model_dump(mode="json"),
+                created_at=latest_revision.created_at.isoformat(),
+            )
+            if latest_revision is not None
+            else None
+        )
+        review_view = (
+            ConsoleReviewView(
+                review_id=latest_review.review_id,
+                revision_id=latest_review.revision_id,
+                decision=latest_review.decision.value,
+                decision_summary=latest_review.decision_summary,
+                scores=tuple(
+                    ConsoleReviewScoreView(
+                        dimension=item.dimension.value,
+                        score=item.score,
+                        rationale=item.rationale,
+                    )
+                    for item in latest_review.scores
+                ),
+                findings=tuple(
+                    ConsoleReviewFindingView(
+                        finding_id=item.finding_id,
+                        dimension=item.dimension.value,
+                        severity=item.severity.value,
+                        message=item.message,
+                        section_id=item.section_id,
+                        claim_ids=tuple(item.claim_ids),
+                        citation_ids=tuple(item.citation_ids),
+                    )
+                    for item in latest_review.findings
+                ),
+                repair_actions=tuple(
+                    ConsoleRepairActionView(
+                        action_id=item.action_id,
+                        kind=item.kind.value,
+                        reason=item.reason,
+                        section_ids=tuple(item.section_ids),
+                        claim_ids=tuple(item.claim_ids),
+                        citation_ids=tuple(item.citation_ids),
+                    )
+                    for item in latest_review.repair_actions
+                ),
+                usage=latest_review.usage.model_dump(mode="json"),
+                created_at=latest_review.created_at.isoformat(),
+            )
+            if latest_review is not None
+            else None
+        )
+        outcome_view = (
+            ConsoleReportOutcomeView(
+                status=outcome.status.value,
+                revisions=outcome.revisions,
+                final_revision_id=outcome.final_revision_id,
+                final_report_artifact_id=(
+                    outcome.final_report_artifact_id
+                ),
+                citation_map_artifact_id=(
+                    outcome.citation_map_artifact_id
+                ),
+                final_review_id=outcome.final_review_id,
+                usage=outcome.usage.model_dump(mode="json"),
+                summary=outcome.summary,
+                completed_at=outcome.completed_at.isoformat(),
+            )
+            if outcome is not None
+            else None
+        )
+        return ConsoleReportingView(
+            report_id=record.report_id,
+            title=(
+                latest_revision.title
+                if latest_revision is not None
+                else report_title
+            ),
+            artifact_ready=record.report_artifact_id is not None,
+            revision_count=len(revisions),
+            latest_revision=revision_view,
+            latest_review=review_view,
+            outcome=outcome_view,
+            outline=sections,
+        )
+
+    @staticmethod
+    def _navigation(record: ApplicationRunRecord) -> ConsoleNavigationView:
+        run_id = record.run_id
+        return ConsoleNavigationView(
+            console_url=f"/console/{record.research_id}",
+            report_url=f"/report/{record.research_id}",
+            studio_url=f"/studio/{run_id}",
+            trace_export_json_url=(
+                f"/api/studio/runs/{run_id}/export?format=json"
+            ),
+            trace_export_ndjson_url=(
+                f"/api/studio/runs/{run_id}/export?format=ndjson"
+            ),
         )
 
     def list_studio_threads(
@@ -775,17 +1557,3 @@ class ResearchConsoleService:
             )
             for item in page.items
         ]
-
-    @staticmethod
-    def _active_agent(stage: str, active: Any) -> str:
-        if active is not None and active.envelope.assigned_actor_id:
-            return str(active.envelope.assigned_actor_id)
-        return {
-            "initializing": "runtime_application",
-            "researching": "research_supervisor",
-            "reporting": "synthesis_writer",
-            "waiting_approval": "human_approval",
-            "completed": "report_reviewer",
-            "failed": "runtime_application",
-            "cancelled": "runtime_application",
-        }.get(stage, "runtime_application")

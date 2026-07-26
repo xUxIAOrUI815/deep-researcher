@@ -3,11 +3,29 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DeepResearcher 研究控制台</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <meta name="theme-color" content="#111827" />
+  <meta
+    name="description"
+    content="DeepResearcher evidence-first research operations console"
+  />
+  <title>DeepResearcher · 研究运行工作台</title>
+  <link
+    rel="stylesheet"
+    href="/static/styles.css?v=console-workspace-2-3"
+  />
 </head>
 <body data-research-id="{{ page_research_id }}">
-  <div id="app"></div>
-  <script type="module" src="/static/app.js"></script>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <div id="app" aria-live="polite"></div>
+  <noscript>
+    <main class="noscript-shell">
+      <h1>需要启用 JavaScript</h1>
+      <p>研究运行工作台依赖 JavaScript 读取本地运行投影和执行审批操作。</p>
+    </main>
+  </noscript>
+  <script
+    type="module"
+    src="/static/app.js?v=console-workspace-2-3"
+  ></script>
 </body>
 </html>

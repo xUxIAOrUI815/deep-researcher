@@ -645,6 +645,7 @@ class ApplicationRuntime:
             research_id,
             status=ApplicationRunStatus.CANCELLED,
             current_stage="cancelled",
+            metadata={"cancellation_reason": reason},
         )
 
     def recoverable_runs(self) -> tuple[ApplicationRunRecord, ...]:
