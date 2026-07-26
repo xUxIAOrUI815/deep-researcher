@@ -129,7 +129,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 08 | `codex/bg001-08-supervisor-worker-pool` | integrated | 2b54206 | Dynamic Supervisor planning, governed Worker Pool, durable dedup/merge/recovery, and semantic convergence complete. |
 | 09 | `codex/bg001-09-synthesis-writer-reviewer` | integrated | 5838f81 | Verified-only Writer, deterministic full-rubric Reviewer, bounded report repairs, and durable revisions/citation maps complete. |
 | 10 | `codex/bg001-10-evaluation-lab-core` | integrated | b5834e9 | Five-split datasets, Frozen/Live modes, deterministic/trace metrics, and reproducible baseline experiments complete. |
-| 11 | `codex/bg001-11-evaluation-semantic-gates` | pending | | |
+| 11 | `codex/bg001-11-evaluation-semantic-gates` | integrated | b9ad3fa | Semantic metrics, calibrated blind judging, release gates, and immutable version promotion/rollback complete. |
 | 12 | `codex/bg001-12-studio-v2` | pending | | |
 | 13 | `codex/bg001-13-studio-v3-v4` | pending | | |
 | 14 | `codex/bg001-14-offline-evolution` | pending | | |
@@ -1083,4 +1083,61 @@ Remaining risks: Branch 11 must add semantic metrics, blind calibrated
   replay/A-B/badcase interaction. Branch 14 owns offline patch generation and
   selection. Branch 15 owns production entry-point migration and stress
   hardening; this branch intentionally does not make release decisions.
+```
+
+### Branch 11 execution record
+
+```text
+Branch: codex/bg001-11-evaluation-semantic-gates
+Started from integration commit: c3d20bd
+Scope delivered: Authorized semantic Evaluation inputs/results with thresholded
+  claim support, supported/contradicted/unsupported/uncited-fact, retrieval
+  precision/recall/authority/freshness/domain-and-type diversity, and report
+  completeness/depth/instruction/organization/readability/safety metrics joined
+  to deterministic URL/schema/immediate-citation-position/cost/source-time
+  metrics; concrete fixed-ModelAdapter Judge integration with strict structured
+  output and bounded repair; odd multi-Judge panels with per-Judge randomized
+  candidate ordering, panel-scoped blind labels, fixed Judge/Rubric versions,
+  no-search/no-rewrite requests, median score and majority voting, immutable
+  ballots and per-dimension range/variance/mixed-vote disagreement records;
+  multi-human aggregation plus tie-aware Pearson/Spearman, MAE, pass-agreement
+  and accepted/rejected calibration records; complete required-improvement,
+  non-regression, absolute/relative-cost, population-variance, safety, protocol,
+  semantic-pass and calibration release policy; exact selection versus final
+  test/hidden-test access enforcement; immutable gate decisions and separately
+  recoverable application records; and a checksummed WAL event-sourced Version
+  Registry for AgentSpec, Skill, Prompt, Tool Policy, Stop Policy and Rubric
+  manifests with candidate/promoted/rejected/superseded/rolled-back states,
+  atomic active-version replacement and full rollback, projection rebuild,
+  concurrent fencing, online backup and corruption audit.
+Boundary check: Gates select/promote/reject/keep/rollback but create or edit no
+  component content. Judges receive no system/baseline identity and cannot
+  search, call tools, rewrite reports or mutate evidence. No patch generation,
+  automatic Skill optimization, badcase optimizer, online self-modification,
+  test/hidden-test tuning, Studio UI, production entry-point migration,
+  compatibility layer, or RL work was added.
+Tests: 293 passed in normal order and 293 passed with test files in reverse
+  order on the feature branch and after the no-ff integration merge. Eleven
+  branch-specific cases (including six parametrized releasable component
+  kinds) and 76 combined contract/artifact/evidence/reporting/evaluation cases
+  passed. Only upstream websockets/uvicorn deprecation warnings remain.
+Failure/recovery tests: Invalid Judge schema and bounded repair, blind identity
+  exclusion, distinct randomized orders, score and vote disagreement,
+  accepted and adversarially rejected human calibration, audited semantic
+  access binding, selection-stage hidden-test leakage, exact final test/hidden
+  coverage, cost/variance/safety/protocol regression rejection,
+  failed-candidate rejection, decision
+  commit followed by application interruption and idempotent recovery,
+  promotion/supersession, post-release regression rollback and replay,
+  transition-journal projection rebuild without journal rewrite,
+  cross-connection concurrent registration, restart, online backup and direct
+  checksum corruption are covered.
+Integration merge commit: b9ad3fa
+Remote push: feature commit dbfb107 pushed successfully; integration push is
+  recorded by this plan commit on 2026-07-26.
+Remaining risks: Branch 12 must expose task/evidence/state-diff/error/budget
+  projections in read-only Studio V2. Branch 13 owns replay, A/B and badcase UI
+  over these evaluations and versions. Branch 14 owns offline structured patch
+  generation and strict selection using these gates. Branch 15 owns production
+  entry-point migration, stress/security hardening and complete composition.
 ```
