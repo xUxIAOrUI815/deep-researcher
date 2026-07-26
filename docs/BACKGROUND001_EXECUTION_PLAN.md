@@ -127,7 +127,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 06 | `codex/bg001-06-orchestration-runtime` | integrated | 0c2ba88 | Durable event-sourced task DAG, leases/recovery, HITL controls, hard scheduling budgets, and real thin-state LangGraph adapter complete. |
 | 07 | `codex/bg001-07-evidence-engine-verifier` | integrated | e9880da | Complete evidence graph, independent verification, six claim states, conflicts, coverage, bounded repair, and verified-only read boundary complete. |
 | 08 | `codex/bg001-08-supervisor-worker-pool` | integrated | 2b54206 | Dynamic Supervisor planning, governed Worker Pool, durable dedup/merge/recovery, and semantic convergence complete. |
-| 09 | `codex/bg001-09-synthesis-writer-reviewer` | pending | | |
+| 09 | `codex/bg001-09-synthesis-writer-reviewer` | integrated | 5838f81 | Verified-only Writer, deterministic full-rubric Reviewer, bounded report repairs, and durable revisions/citation maps complete. |
 | 10 | `codex/bg001-10-evaluation-lab-core` | pending | | |
 | 11 | `codex/bg001-11-evaluation-semantic-gates` | pending | | |
 | 12 | `codex/bg001-12-studio-v2` | pending | | |
@@ -969,4 +969,65 @@ Remaining risks: Branch 09 must consume the verified-only evidence view and
   Branches 10-14 still own evaluation, release gates, advanced Studio, and
   offline evolution. Branch 15 still owns production entry-point migration and
   removal of the transitional draft graph.
+```
+
+### Branch 09 execution record
+
+```text
+Branch: codex/bg001-09-synthesis-writer-reviewer
+Started from integration commit: 0cc2ba7
+Scope delivered: Shared-AgentKernel Synthesis Writer and Report Reviewer
+  AgentSpecs with no tool/search grants; persisted verified-only Writer packet
+  assembled solely through the strict evidence view; unsupported required
+  claims converted to explicit gaps; typed section synthesis with independent
+  semantic support checks, per-claim citation relationship validation,
+  configurable normal/high-impact source independence, deterministic Markdown
+  rendering, immediate citation placement, explicit conflict/uncertainty
+  presentation and cross-section consistency; complete eight-dimension Reviewer
+  rubric whose deterministic artifact audit cannot be overridden by model
+  scores; typed and bounded targeted-research, citation-repair, local-rewrite,
+  structural-rewrite, accept and reject decisions; concrete Scheduler/Research
+  Worker Pool targeted-research dispatch followed by Evidence Engine
+  verification and verified-packet rebuild; aggregate report-loop budgets,
+  cancellation, approval, revision and research-round bounds; immutable
+  checksummed WAL report revision, citation-map, review and terminal-outcome
+  journal with restart, backup and corruption checks; structured draft,
+  section, report, citation, review and loop-decision artifacts; domain
+  Report/Section lifecycle projection; and composition/runtime documentation.
+Boundary check: Writer has no search/provider tools and cannot receive candidate
+  knowledge as factual claims. Reviewer changes only Report/Section lifecycle
+  and quality projections, never Fact/Claim/Evidence/Citation/Conflict
+  verification conclusions. Research repairs remain candidate-only until the
+  Evidence Engine verifies them. No production entry-point migration,
+  evaluation or release gate, Skill/Prompt optimization, online
+  self-modification, compatibility layer, or RL work was added.
+Tests: 271 passed in normal order and 271 passed with test files in reverse
+  order on the feature branch; 271 passed in both orders after the no-ff
+  integration merge. Fifteen branch-specific cases cover role boundaries,
+  complete accepted synthesis, verified/candidate isolation, explicit gaps,
+  conflict and uncertainty presentation, high-impact multi-source enforcement,
+  unverified/undercited rejection, citation/local/structural rewrites,
+  deterministic false-accept override, explicit reject, revision exhaustion,
+  cancellation, bounded model schema repair, reporting-store durability and
+  real scheduler targeted research. The combined Evidence/Supervisor/Reporting
+  suite passed 46 cases. Only upstream websockets/uvicorn deprecation warnings
+  remain.
+Failure/recovery tests: Invalid and repeatedly repaired structured output,
+  unknown/unverified claim and citation references, insufficient independent
+  sources, missing gaps/conflicts, inconsistent cross-section claim rendering,
+  false model acceptance, immutable revision conflicts, concurrent idempotent
+  writes, restart reads, online backup/reopen, checksum corruption, terminal
+  outcome replay, cancellation before model execution, aggregate revision
+  bounds, active scheduler research-task materialization, and terminal
+  scheduler approval fencing are covered.
+Integration merge commit: 5838f81
+Remote push: feature commit bb6b6b4 pushed successfully; integration push is
+  recorded by this plan commit on 2026-07-26.
+Remaining risks: Branches 10-11 must turn persisted reports, citations, reviews,
+  outcomes and traces into deterministic/semantic evaluation and release
+  gates. Branches 12-13 still own report/evidence visualization, replay and
+  comparison UI. Branch 14 owns offline evolution only. Branch 15 must compose
+  scheduler lifecycle with report-time targeted research, switch production
+  entry points to this runtime, exercise long-report stress, and remove the
+  transitional draft Writer/graph paths.
 ```
