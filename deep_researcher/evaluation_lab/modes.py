@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from statistics import fmean, pvariance
-from typing import Any, Protocol
+from typing import Protocol
 
 from deep_researcher.artifacts.store import ArtifactStore
 from deep_researcher.contracts import (

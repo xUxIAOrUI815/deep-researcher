@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
 from urllib.parse import urlsplit
 
 from deep_researcher.contracts import (

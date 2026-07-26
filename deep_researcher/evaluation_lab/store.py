@@ -21,6 +21,12 @@ from .models import (
     LiveWebEvaluation,
     RegisteredDataset,
 )
+from .semantic_models import (
+    JudgeCalibrationRecord,
+    JudgePanelResult,
+    SemanticEvaluationResult,
+)
+from .gate_models import GateApplicationRecord, ReleaseGateDecision
 from deep_researcher.contracts import DatasetDefinition, DatasetSample
 
 
@@ -457,6 +463,135 @@ class SQLiteEvaluationStore:
             comparison_id,
             ExperimentComparison,
         )
+
+    def save_judge_panel(self, value: JudgePanelResult) -> None:
+        self._save(
+            "judge_panel",
+            value.panel_result_id,
+            value.panel_id,
+            value.rubric_version_id,
+            value,
+        )
+
+    def judge_panel(self, panel_result_id: str) -> JudgePanelResult | None:
+        return self._get(
+            "judge_panel",
+            panel_result_id,
+            JudgePanelResult,
+        )
+
+    def save_judge_calibration(
+        self,
+        value: JudgeCalibrationRecord,
+    ) -> None:
+        self._save(
+            "judge_calibration",
+            value.calibration_id,
+            value.rubric_version_id,
+            "accepted" if value.accepted else "rejected",
+            value,
+        )
+
+    def judge_calibration(
+        self,
+        calibration_id: str,
+    ) -> JudgeCalibrationRecord | None:
+        return self._get(
+            "judge_calibration",
+            calibration_id,
+            JudgeCalibrationRecord,
+        )
+
+    def save_semantic_result(
+        self,
+        value: SemanticEvaluationResult,
+    ) -> None:
+        self._save(
+            "semantic_evaluation",
+            value.semantic_evaluation_id,
+            value.dataset_id,
+            value.subject_version_id,
+            value,
+        )
+
+    def semantic_result(
+        self,
+        semantic_evaluation_id: str,
+    ) -> SemanticEvaluationResult | None:
+        return self._get(
+            "semantic_evaluation",
+            semantic_evaluation_id,
+            SemanticEvaluationResult,
+        )
+
+    def semantic_results(
+        self,
+        *,
+        dataset_id: str | None = None,
+        subject_version_id: str | None = None,
+    ) -> tuple[SemanticEvaluationResult, ...]:
+        return self._list(
+            "semantic_evaluation",
+            SemanticEvaluationResult,
+            scope_one=dataset_id,
+            scope_two=subject_version_id,
+        )
+
+    def save_gate_decision(self, value: ReleaseGateDecision) -> None:
+        self._save(
+            "release_gate_decision",
+            value.gate_decision_id,
+            value.candidate_version_id,
+            value.stage.value,
+            value,
+        )
+
+    def gate_decision(
+        self,
+        gate_decision_id: str,
+    ) -> ReleaseGateDecision | None:
+        return self._get(
+            "release_gate_decision",
+            gate_decision_id,
+            ReleaseGateDecision,
+        )
+
+    def gate_decisions(
+        self,
+        candidate_version_id: str | None = None,
+    ) -> tuple[ReleaseGateDecision, ...]:
+        return self._list(
+            "release_gate_decision",
+            ReleaseGateDecision,
+            scope_one=candidate_version_id,
+        )
+
+    def save_gate_application(
+        self,
+        value: GateApplicationRecord,
+    ) -> None:
+        self._save(
+            "release_gate_application",
+            value.application_id,
+            value.gate_decision_id,
+            value.candidate_version_id,
+            value,
+        )
+
+    def gate_application(
+        self,
+        gate_decision_id: str,
+    ) -> GateApplicationRecord | None:
+        values = self._list(
+            "release_gate_application",
+            GateApplicationRecord,
+            scope_one=gate_decision_id,
+        )
+        if len(values) > 1:
+            raise EvaluationStoreCorruption(
+                "gate decision has multiple application records"
+            )
+        return values[0] if values else None
 
     def integrity_check(self) -> None:
         with self._lock:
