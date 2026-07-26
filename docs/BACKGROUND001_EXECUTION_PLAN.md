@@ -132,7 +132,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 11 | `codex/bg001-11-evaluation-semantic-gates` | integrated | b9ad3fa | Semantic metrics, calibrated blind judging, release gates, and immutable version promotion/rollback complete. |
 | 12 | `codex/bg001-12-studio-v2` | integrated | e363823 | Read-only paginated Task/Evidence graphs, event-rebuilt state diffs, recovery/resource/version views, snapshot navigation, and Studio UI complete. |
 | 13 | `codex/bg001-13-studio-v3-v4` | integrated | b537426 | Immutable AgentKernel replay/fork, fresh approvals, aligned A/B, component diff, badcase provenance, durable recovery, APIs and Studio V4 UI complete. |
-| 14 | `codex/bg001-14-offline-evolution` | feature complete | pending merge | Reviewed trace/badcase/evaluation pool, bounded structured patches, strict gated selection, rejected-edit memory, human release, best_skill and rollback complete. |
+| 14 | `codex/bg001-14-offline-evolution` | integrated | 80dbde8 | Reviewed trace/badcase/evaluation pool, bounded structured patches, strict gated selection, rejected-edit memory, human release, best_skill and rollback complete. |
 | 15 | `codex/bg001-15-integration-hardening` | pending | | |
 
 ## 00 - Foundation contracts and baseline
@@ -1289,12 +1289,13 @@ Boundary check: Pool submission and review set optimizer/publication triggers to
   compatibility layer, hidden chain-of-thought, RL framework or RL training was
   added.
 Tests: 318 passed in normal order and 318 passed with test files in reverse
-  order on the feature branch. Sixteen Branch-14 scenarios cover all eight
-  target boundaries and dense end-to-end/durability paths; 32 combined
-  Evolution, semantic gate and advanced Studio cases passed after the final
-  recovery hardening. Python compilation, pyflakes on non-export modules and
-  git diff validation passed. Only upstream websockets/uvicorn deprecation
-  warnings remain.
+  order on the feature branch, then both full-suite orders passed again after
+  the no-ff integration merge. Sixteen Branch-14 scenarios cover all eight
+  target boundaries and dense end-to-end/durability paths; 56 combined
+  Evolution, semantic gate, advanced Studio, Artifact and Contract cases passed
+  in both orders on the integration branch. Python compilation, pyflakes on
+  non-export modules and git diff validation passed. Only upstream
+  websockets/uvicorn deprecation warnings remain.
 Failure/recovery tests: Production trace non-self-promotion, missing source
   categories, unreviewed inputs, observed split relabel and hidden-test leakage,
   non-strict selection, cost/safety final rejection, human rejection, round
@@ -1307,8 +1308,9 @@ Failure/recovery tests: Production trace non-self-promotion, missing source
   append-only trigger enforcement, cursor pagination, online backup/reopen,
   promotion, post-release regression rollback and best_skill restoration are
   covered.
-Integration merge commit: pending
-Remote push: pending
+Integration merge commit: 80dbde8
+Remote push: feature commit afa695e pushed successfully; integration push is
+  recorded by this plan commit on 2026-07-26.
 Remaining risks: Branch 15 must compose this offline loop with the fully migrated
   runtime entry points without adding online inference, remove all transitional
   draft execution paths, and run the specified database-lock, artifact-size,
