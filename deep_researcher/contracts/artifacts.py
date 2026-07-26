@@ -52,6 +52,16 @@ class ArtifactKind(str, Enum):
     STUDIO_REPLAY_RESULT = "studio_replay_result"
     STUDIO_COMPARISON = "studio_comparison"
     BADCASE = "badcase"
+    EVOLUTION_POOL_ENTRY = "evolution_pool_entry"
+    EVOLUTION_POOL_REVIEW = "evolution_pool_review"
+    EVOLUTION_EXPERIENCE = "evolution_experience"
+    EVOLUTION_CAMPAIGN = "evolution_campaign"
+    EVOLUTION_INPUT = "evolution_input"
+    EVOLUTION_PATCH = "evolution_patch"
+    EVOLUTION_CANDIDATE = "evolution_candidate"
+    EVOLUTION_HUMAN_DECISION = "evolution_human_decision"
+    REJECTED_EDIT_MEMORY = "rejected_edit_memory"
+    BEST_SKILL = "best_skill"
     OTHER = "other"
 
 
