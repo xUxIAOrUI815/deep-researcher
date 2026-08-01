@@ -136,7 +136,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 14 | `codex/bg001-14-offline-evolution` | integrated | 80dbde8 | Reviewed trace/badcase/evaluation pool, bounded structured patches, strict gated selection, rejected-edit memory, human release, best_skill and rollback complete. |
 | 15 | `codex/bg001-15-integration-hardening` | integrated | c241efc | Production composition, draft removal, native-scheduler ADR, full recovery/security/stress gates, and capability-boundary documentation complete. |
 | 16 | `codex/bg001-16-console-runtime-alignment` | integrated | 1d9c3f4 | Complete root Console projection, operational workspace, report lifecycle, actions, accessibility, and browser/API contract alignment. |
-| 17 | `codex/bg001-17-live-runtime-contract-recovery` | completed locally | pending merge | Strict live Worker contracts, governed phase protocol, grounded ingestion, bounded recovery/convergence, verified-only reporting repair, causal errors, and Console role/stage projection complete. |
+| 17 | `codex/bg001-17-live-runtime-contract-recovery` | integrated | 618f4a8 | Strict live Worker contracts, governed phase protocol, grounded ingestion, bounded recovery/convergence, verified-only reporting repair, causal errors, and Console role/stage projection complete. |
 
 ## 00 - Foundation contracts and baseline
 
@@ -1569,8 +1569,9 @@ Failure/recovery tests: Live traces covered schema exhaustion, malformed model
   downstream role attribution. SQLite restart/replay, cancellation, approval,
   concurrency, protocol, reporting and projection recovery remain covered by
   both complete suite orders.
-Integration merge commit: pending
-Remote push: pending
+Integration merge commit: 618f4a8
+Remote push: feature commit e27341b pushed successfully; integration push is
+  recorded by this plan commit on 2026-08-01.
 Remaining risks: The final post-fix configured live retry received permanent
   DeepSeek HTTP 402 on its first Supervisor call, so a fresh terminal online
   report requires restored provider quota. Earlier same-session live runs
