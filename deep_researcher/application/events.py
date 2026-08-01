@@ -247,6 +247,7 @@ class ApplicationRunEventController:
                 )
             )
             self.last_event_id = page.items[-1].event_id if page.items else None
+            self._close_detached_open_spans()
             return
         self._record(
             EventType.RUN_STARTED,
@@ -314,10 +315,16 @@ class ApplicationRunEventController:
             usage=usage,
         )
 
-    def fail(self, *, error: ErrorRecord, usage: BudgetUsage) -> None:
+    def fail(
+        self,
+        *,
+        error: ErrorRecord,
+        usage: BudgetUsage,
+        evidence_failed: bool = True,
+    ) -> None:
         if self._terminal():
             return
-        self.evidence_sink.close(failed=True)
+        self.evidence_sink.close(failed=evidence_failed)
         self._record(
             EventType.RUN_FAILED,
             RunStatus.FAILED,
@@ -378,3 +385,114 @@ class ApplicationRunEventController:
     def _terminal(self) -> bool:
         record = self.recorder.store.get_run(self.run_id)
         return record is not None and record.terminal_event_id is not None
+
+    def _close_detached_open_spans(self) -> None:
+        """Balance non-root spans left open by a prior process attempt."""
+        events: list[RunEvent] = []
+        after = 0
+        while True:
+            page = self.recorder.store.list(
+                EventQuery(
+                    self.run_id,
+                    after_sequence=after,
+                    limit=1000,
+                )
+            )
+            events.extend(page.items)
+            if page.next_after_sequence is None:
+                break
+            after = page.next_after_sequence
+
+        start_types = {
+            EventType.RUN_STARTED,
+            EventType.SPAN_STARTED,
+            EventType.MODEL_STARTED,
+            EventType.TOOL_STARTED,
+        }
+        terminal_types = {
+            EventType.RUN_COMPLETED,
+            EventType.RUN_FAILED,
+            EventType.RUN_CANCELLED,
+            EventType.SPAN_COMPLETED,
+            EventType.SPAN_FAILED,
+            EventType.MODEL_COMPLETED,
+            EventType.MODEL_FAILED,
+            EventType.TOOL_COMPLETED,
+            EventType.TOOL_FAILED,
+        }
+        open_spans: dict[str, RunEvent] = {}
+        for event in events:
+            if event.event_type in start_types:
+                open_spans[event.span_id] = event
+            if event.event_type in terminal_types:
+                open_spans.pop(event.span_id, None)
+        open_spans.pop(self.root_span_id, None)
+
+        def depth(event: RunEvent) -> int:
+            level = 0
+            parent = event.parent_span_id
+            seen: set[str] = set()
+            while parent in open_spans and parent not in seen:
+                seen.add(parent)
+                level += 1
+                parent = open_spans[parent].parent_span_id
+            return level
+
+        for started in sorted(
+            open_spans.values(),
+            key=lambda item: (depth(item), item.sequence_no),
+            reverse=True,
+        ):
+            error = ErrorRecord(
+                category=ErrorCategory.CANCELLED,
+                code="detached_span_recovered",
+                message=(
+                    "A span left open by a prior runtime attempt was closed "
+                    "before durable execution resumed."
+                ),
+                fatal=False,
+                actor_id=started.actor_id,
+                task_id=started.task_id,
+            )
+            recovery = RunEvent(
+                sequence_no=self.recorder.store.next_sequence(self.run_id),
+                event_type=EventType.SPAN_FAILED,
+                level=EventLevel.WARNING,
+                status=RunStatus.FAILED,
+                trace_id=self.trace_id,
+                span_id=started.span_id,
+                parent_span_id=started.parent_span_id,
+                span_kind=started.span_kind,
+                correlation_id=self.correlation_id,
+                causation_event_id=self.last_event_id,
+                run_id=self.run_id,
+                thread_id=self.thread_id,
+                task_id=started.task_id,
+                actor_id="runtime_application_recovery",
+                producer_id="runtime_background001_application",
+                error=error,
+                component_versions=self.component_versions,
+                payload={
+                    "stage": "recovery",
+                    "recovered_span_kind": started.span_kind.value,
+                    "recovered_start_event_id": started.event_id,
+                },
+            )
+            for _ in range(20):
+                try:
+                    recorded = self.recorder.record(recovery).append.event
+                    self.last_event_id = recorded.event_id
+                    break
+                except SequenceConflict:
+                    recovery = recovery.model_copy(
+                        update={
+                            "sequence_no": self.recorder.store.next_sequence(
+                                self.run_id
+                            ),
+                            "causation_event_id": self.last_event_id,
+                        }
+                    )
+            else:
+                raise SequenceConflict(
+                    "could not close detached application span"
+                )

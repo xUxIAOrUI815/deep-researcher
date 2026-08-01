@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 from deep_researcher.artifacts.store import ArtifactStore
 from deep_researcher.contracts import (
@@ -86,6 +87,127 @@ def _source_classification(raw: Mapping[str, Any]) -> tuple[SourceType, SourceLe
             SourceType.ACADEMIC: SourceLevel.SECONDARY,
         }.get(source_type, SourceLevel.UNKNOWN)
     return source_type, source_level
+
+
+_SCHOLARLY_PRIMARY_HOSTS = (
+    "aclanthology.org",
+    "arxiv.org",
+    "dl.acm.org",
+    "doi.org",
+    "ieeexplore.ieee.org",
+    "link.springer.com",
+    "nature.com",
+    "onlinelibrary.wiley.com",
+    "openreview.net",
+    "proceedings.neurips.cc",
+    "sciencedirect.com",
+)
+_COMMUNITY_HOSTS = (
+    "facebook.com",
+    "linkedin.com",
+    "medium.com",
+    "reddit.com",
+    "youtube.com",
+)
+
+
+def _host_matches(host: str, candidates: tuple[str, ...]) -> bool:
+    return any(host == item or host.endswith(f".{item}") for item in candidates)
+
+
+def _deterministic_source_profile(
+    url: str,
+) -> tuple[SourceType, SourceLevel, float] | None:
+    """Classify authority from stable source identity, never search rank.
+
+    Provider ``score`` fields are relevance scores. Treating them as source
+    authority lets a highly ranked blog outrank a paper original, and a later
+    read (which has no relevance score) can accidentally downgrade an already
+    discovered primary source to zero. The profile below is deliberately
+    conservative and records only source classes that can be inferred from the
+    canonical host itself.
+    """
+
+    host = (urlsplit(url).hostname or "").casefold().removeprefix("www.")
+    if not host:
+        return None
+    if _host_matches(host, _SCHOLARLY_PRIMARY_HOSTS):
+        return SourceType.PRIMARY, SourceLevel.PRIMARY, 0.9
+    if (
+        host.endswith(".gov")
+        or ".gov." in host
+        or host.endswith(".mil")
+    ):
+        return SourceType.OFFICIAL_DOCUMENTATION, SourceLevel.PRIMARY, 0.9
+    if (
+        host.endswith(".edu")
+        or ".edu." in host
+        or host.endswith(".ac.uk")
+    ):
+        return SourceType.PRIMARY, SourceLevel.PRIMARY, 0.82
+    if _host_matches(host, _COMMUNITY_HOSTS):
+        return SourceType.COMMUNITY, SourceLevel.TERTIARY, 0.2
+    if host.startswith("docs.") or host.startswith("developer."):
+        return SourceType.OFFICIAL_DOCUMENTATION, SourceLevel.PRIMARY, 0.72
+    return None
+
+
+def _default_authority(
+    source_type: SourceType,
+    source_level: SourceLevel,
+) -> float:
+    if source_type in {
+        SourceType.PRIMARY,
+        SourceType.OFFICIAL_DOCUMENTATION,
+        SourceType.DATASET,
+    }:
+        return 0.8
+    if source_type == SourceType.ACADEMIC:
+        return 0.72
+    if source_type in {SourceType.SECONDARY, SourceType.NEWS}:
+        return 0.5
+    if source_type in {SourceType.TERTIARY, SourceType.COMMUNITY}:
+        return 0.25
+    return {
+        SourceLevel.PRIMARY: 0.8,
+        SourceLevel.SECONDARY: 0.5,
+        SourceLevel.TERTIARY: 0.25,
+        SourceLevel.UNKNOWN: 0.0,
+    }[source_level]
+
+
+def _source_profile(
+    raw: Mapping[str, Any],
+    url: str,
+    existing: Source | None,
+) -> tuple[SourceType, SourceLevel, float]:
+    source_type, source_level = _source_classification(raw)
+    deterministic = _deterministic_source_profile(url)
+    if deterministic is not None:
+        source_type, source_level, authority = deterministic
+    else:
+        explicit_authority = raw.get("authority_score")
+        try:
+            authority = (
+                max(0.0, min(1.0, float(explicit_authority)))
+                if explicit_authority is not None
+                else _default_authority(source_type, source_level)
+            )
+        except (TypeError, ValueError):
+            authority = _default_authority(source_type, source_level)
+
+    if existing is not None:
+        authority = max(authority, existing.authority_score)
+        level_rank = {
+            SourceLevel.UNKNOWN: 0,
+            SourceLevel.TERTIARY: 1,
+            SourceLevel.SECONDARY: 2,
+            SourceLevel.PRIMARY: 3,
+        }
+        if level_rank[existing.source_level] > level_rank[source_level]:
+            source_type = existing.source_type
+            source_level = existing.source_level
+    return source_type, source_level, authority
 
 
 def _aware_datetime(value: Any) -> datetime | None:
@@ -283,31 +405,62 @@ class KnowledgeIngestionService:
             discovered_at = (
                 existing_source.discovered_at if existing_source else utc_now()
             )
-            source_type, source_level = _source_classification(raw_source)
+            source_type, source_level, authority_score = _source_profile(
+                raw_source,
+                url,
+                existing_source,
+            )
+            source_artifact_ids = (output_artifact.artifact_id,)
+            if existing_source is not None:
+                source_artifact_ids = tuple(
+                    dict.fromkeys(
+                        (
+                            *existing_source.provenance.source_artifact_ids,
+                            output_artifact.artifact_id,
+                        )
+                    )
+                )
             source = Source(
                 source_id=source_id,
                 canonical_url=url,
                 source_type=source_type,
                 source_level=source_level,
                 status=SourceStatus.ACCESSIBLE,
-                title=normalize_text(str(raw_source.get("title", ""))) or None,
-                publisher=normalize_text(str(raw_source.get("publisher", ""))) or None,
-                authority_score=max(
-                    0.0, min(1.0, float(raw_source.get("score", 0.0) or 0.0))
+                title=(
+                    normalize_text(str(raw_source.get("title", "")))
+                    or (existing_source.title if existing_source else None)
                 ),
-                published_at=_aware_datetime(raw_source.get("published_at")),
+                publisher=(
+                    normalize_text(str(raw_source.get("publisher", "")))
+                    or (existing_source.publisher if existing_source else None)
+                ),
+                authority_score=authority_score,
+                published_at=(
+                    _aware_datetime(raw_source.get("published_at"))
+                    or (
+                        existing_source.published_at
+                        if existing_source is not None
+                        else None
+                    )
+                ),
                 discovered_at=discovered_at,
                 updated_at=utc_now(),
                 provenance=self._provenance(
                     producer_id="agent_researcher",
                     run_id=run_id,
                     task_id=task_id,
-                    source_artifact_ids=(output_artifact.artifact_id,),
+                    source_artifact_ids=source_artifact_ids,
                 ),
                 metadata={
                     "legacy_source_id": raw_source.get("source_id"),
                     "extraction_method": raw_source.get("extraction_method"),
                     "search_query": raw_source.get("query"),
+                    "search_relevance_score": raw_source.get("score"),
+                    "authority_basis": (
+                        "canonical_host"
+                        if _deterministic_source_profile(url) is not None
+                        else "declared_source_class"
+                    ),
                 },
             )
             source = self._stable_entity(source)
@@ -520,21 +673,53 @@ class KnowledgeIngestionService:
                 or json.dumps(raw, sort_keys=True, default=str)
             )
             legacy_source = str(raw.get("source_id") or "")
-            candidates = passages_by_legacy_source.get(legacy_source, [])
             source_url = str(raw.get("source_url") or "")
-            if not candidates and source_url:
+            candidates: list[Passage] = []
+            if source_url:
                 try:
-                    candidates = passages_by_url.get(canonicalize_url(source_url), [])
+                    candidates.extend(
+                        passages_by_url.get(canonicalize_url(source_url), [])
+                    )
                 except ValueError:
-                    candidates = []
+                    pass
+            candidates.extend(
+                passages_by_legacy_source.get(legacy_source, [])
+            )
+            candidates = list(
+                {
+                    item.passage_id: item
+                    for item in candidates
+                }.values()
+            )
             if not candidates:
                 issues.append(
                     f"evidence has no persisted passage and was skipped: {legacy_id}"
                 )
                 continue
+            grounded = next(
+                (
+                    (candidate, quotes)
+                    for candidate in sorted(
+                        candidates,
+                        key=lambda item: (
+                            item.extraction_method == "search_provider",
+                            -item.extracted_at.timestamp(),
+                        ),
+                    )
+                    if (quotes := self._candidate_quotes(raw, candidate))
+                ),
+                None,
+            )
+            if grounded is None:
+                issues.append(
+                    "evidence quote is not an exact substring of its persisted "
+                    f"passage and was skipped: {legacy_id}"
+                )
+                continue
+            passage, quotes = grounded
             evidence = Evidence(
                 evidence_id=_entity_id("evidence", run_id, legacy_id),
-                passage_ids=(candidates[0].passage_id,),
+                passage_ids=(passage.passage_id,),
                 relation=EvidenceRelation.SUPPORTS,
                 status=EvidenceStatus.PROPOSED,
                 summary=normalize_text(
@@ -555,7 +740,7 @@ class KnowledgeIngestionService:
                 source_quality=max(
                     0.0, min(1.0, float(raw.get("quality_score", 0.5) or 0.5))
                 ),
-                quotes=self._candidate_quotes(raw, candidates[0]),
+                quotes=quotes,
                 provenance=self._provenance(
                     producer_id="agent_distiller",
                     run_id=run_id,
@@ -592,11 +777,15 @@ class KnowledgeIngestionService:
                     f"fact has no persisted evidence and was skipped: {legacy_id}"
                 )
                 continue
+            statement = normalize_text(
+                str(raw.get("text") or raw.get("statement") or "")
+            )[:4000]
+            if not statement:
+                issues.append(f"empty fact skipped: {legacy_id}")
+                continue
             fact = AtomicFact(
                 fact_id=_entity_id("fact", run_id, legacy_id),
-                statement=normalize_text(
-                    str(raw.get("text") or raw.get("statement") or "")
-                )[:4000],
+                statement=statement,
                 evidence_ids=tuple(item.evidence_id for item in supporting[:3]),
                 status=FactStatus.PROPOSED,
                 confidence=max(0.0, min(1.0, float(raw.get("confidence", 0.5) or 0.5))),
@@ -608,9 +797,6 @@ class KnowledgeIngestionService:
                     source_artifact_ids=(output_artifact.artifact_id,),
                 ),
             )
-            if not fact.statement:
-                issues.append(f"empty fact skipped: {legacy_id}")
-                continue
             fact = self._stable_entity(fact)
             entities.append(fact)
             fact_map[legacy_id] = fact
@@ -659,6 +845,11 @@ class KnowledgeIngestionService:
             )[:8000]
             if not statement:
                 issues.append(f"empty claim skipped: {legacy_id}")
+                continue
+            if not evidence_ids:
+                issues.append(
+                    f"claim has no persisted grounded evidence and was skipped: {legacy_id}"
+                )
                 continue
             claim = Claim(
                 claim_id=_entity_id("claim", run_id, legacy_id),

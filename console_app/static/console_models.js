@@ -50,6 +50,7 @@ const STATUS_LABELS = {
   high: "高",
   critical: "严重",
   continue_research: "继续研究",
+  complete_with_gaps: "有界完成（含证据缺口）",
   stop_low_gain: "低增益停止",
   stop_budget: "预算停止",
   stop_conflict: "冲突停止",
@@ -160,6 +161,7 @@ export function normalizeWorkspace(payload) {
       progress: arrayOf(payload.runtime.progress),
       roles: arrayOf(payload.runtime.roles),
       decision_reasons: arrayOf(payload.runtime.decision_reasons),
+      causal_errors: arrayOf(payload.runtime.causal_errors),
     },
     actions: {
       ...payload.actions,

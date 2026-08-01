@@ -2,21 +2,26 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from deep_researcher.application import (
+    ApplicationRuntime,
     ApplicationRunStatus,
     ResearchCreateRequest,
 )
 from deep_researcher.contracts import (
     BudgetUsage,
+    ErrorCategory,
+    ErrorRecord,
     EventType,
     RunStatus,
 )
 from deep_researcher.events import EventQuery
 from deep_researcher.kernel import ModelResponse
 from deep_researcher.orchestration import RunControlStatus, TaskStatus
+from deep_researcher.research import ConvergenceAction
 from tests.fixtures.background001_application import (
     STATEMENT,
     DeterministicSupervisorModel,
@@ -39,6 +44,53 @@ def _request(query: str = "Verify the benchmark.") -> ResearchCreateRequest:
     )
 
 
+def test_research_incomplete_error_prefers_scheduler_terminal_error_ref():
+    recovered = ErrorRecord(
+        error_id="error_recovered_schema",
+        category=ErrorCategory.SCHEMA_VALIDATION,
+        code="command_schema_invalid",
+        message="The first command was repaired.",
+        retryable=True,
+    )
+    terminal = ErrorRecord(
+        error_id="error_terminal_action",
+        category=ErrorCategory.INTERNAL,
+        code="action_execution_failed",
+        message="The terminal extraction action failed.",
+        fatal=True,
+    )
+    events = tuple(
+        SimpleNamespace(
+            payload={"error": item.model_dump(mode="json")},
+            error=None,
+            actor_id="agent:test",
+            task_id="task:test",
+        )
+        for item in (recovered, terminal)
+    )
+
+    class _EventStore:
+        @staticmethod
+        def list(_query):
+            return SimpleNamespace(
+                items=events,
+                next_after_sequence=None,
+            )
+
+    runtime = SimpleNamespace(event_store=_EventStore())
+    selected = ApplicationRuntime._research_incomplete_error(
+        runtime,
+        "run:test",
+        action=ConvergenceAction.STOP_MAX_CYCLES,
+        error_refs=(terminal.error_id,),
+    )
+
+    assert selected.error_id == terminal.error_id
+    assert selected.code == terminal.code
+    assert selected.retryable is False
+    assert selected.fatal is True
+
+
 @pytest.mark.asyncio
 async def test_production_composition_runs_research_to_verified_report(
     tmp_path: Path,
@@ -53,6 +105,10 @@ async def test_production_composition_runs_research_to_verified_report(
         assert search.calls >= 1
         scheduler = await runtime.scheduler.snapshot(completed.run_id)
         assert scheduler.control.status == RunControlStatus.COMPLETED
+        root = scheduler.by_id[completed.root_task_id]
+        assert root.envelope.max_attempts == (
+            runtime._cycles_for_depth(completed.depth) + 1
+        )
         assert all(
             item.envelope.status
             in {
@@ -272,7 +328,7 @@ async def test_model_failure_is_terminal_structured_and_redacted(
         created = runtime.new_run(_request("Fail safely."))
         failed = await runtime.execute(created.research_id)
         assert failed.status == ApplicationRunStatus.FAILED
-        assert failed.error_code == "application_runtimeerror"
+        assert failed.error_code == "model_invocation_failed"
         assert failed.error_message is not None
         assert "sk-123" not in failed.error_message
         sanitized = runtime._error(
@@ -288,6 +344,66 @@ async def test_model_failure_is_terminal_structured_and_redacted(
         assert (
             await runtime.scheduler.snapshot(created.run_id)
         ).control.status == RunControlStatus.CANCELLED
+    finally:
+        await _close(runtime, tools)
+
+
+class _MalformedWorkerModel:
+    async def complete(self, request):
+        return ModelResponse(
+            structured={
+                "summary": "Malformed DeepSeek-shaped commands.",
+                "commands": [
+                    {
+                        "arguments": {
+                            "operation": "search",
+                            "query": "RAG papers",
+                        }
+                    }
+                ],
+            },
+            usage=BudgetUsage(model_calls=1),
+        )
+
+    async def repair(self, request, invalid_response, errors):
+        return await self.complete(request)
+
+
+@pytest.mark.asyncio
+async def test_malformed_worker_retries_then_fails_before_reporting(
+    tmp_path: Path,
+):
+    runtime, tools, search = build_deterministic_application(
+        tmp_path,
+        worker_model=_MalformedWorkerModel(),
+    )
+    try:
+        created = runtime.new_run(_request("Research live RAG papers."))
+        failed = await runtime.execute(created.research_id)
+        assert failed.status == ApplicationRunStatus.FAILED
+        assert failed.error_code == "command_schema_invalid"
+        assert failed.metadata["research_action"] in {
+            "stop_low_gain",
+            "stop_max_cycles",
+        }
+        assert search.calls == 0
+        assert runtime.reporting_store.revisions(
+            created.run_id,
+            created.report_id,
+        ) == ()
+        snapshot = await runtime.scheduler.snapshot(created.run_id)
+        assert snapshot.control.status == RunControlStatus.CANCELLED
+        worker_tasks = [
+            item
+            for item in snapshot.tasks
+            if "research_worker" in item.envelope.tags
+        ]
+        assert worker_tasks
+        assert any(item.envelope.attempt > 1 for item in worker_tasks)
+        assert all(
+            item.envelope.status != TaskStatus.COMPLETED
+            for item in worker_tasks
+        )
     finally:
         await _close(runtime, tools)
 

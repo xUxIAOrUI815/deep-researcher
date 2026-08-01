@@ -144,9 +144,34 @@ class ConvergenceEvaluator:
             if self.policy.stop_on_any_severe_conflict
             else ()
         )
+        claim_collection = getattr(repository, "claims", None)
+        citation_collection = getattr(repository, "citations", None)
+        claim_items = (
+            claim_collection.list(run_id)
+            if claim_collection is not None
+            else ()
+        )
+        verified_claim_ids = {
+            item.claim_id
+            for item in claim_items
+            if getattr(getattr(item, "status", None), "value", None)
+            == "supported"
+        }
+        citation_items = (
+            citation_collection.list(run_id)
+            if citation_collection is not None
+            else ()
+        )
+        verified_citation_count = sum(
+            1
+            for item in citation_items
+            if getattr(item, "claim_id", None) in verified_claim_ids
+        )
 
         active: list[str] = []
         pending: list[str] = []
+        runnable: list[str] = []
+        dependency_blocked: list[str] = []
         failed: list[str] = []
         waiting: list[str] = []
         for record in scheduler_snapshot.tasks:
@@ -160,13 +185,28 @@ class ConvergenceEvaluator:
             status = record.envelope.status
             if status == TaskStatus.RUNNING:
                 active.append(record.task_id)
+            elif status == TaskStatus.READY:
+                pending.append(record.task_id)
+                runnable.append(record.task_id)
             elif status in {
                 TaskStatus.PENDING,
-                TaskStatus.READY,
                 TaskStatus.PAUSED,
                 TaskStatus.DEFERRED,
             }:
                 pending.append(record.task_id)
+                dependency_statuses = {
+                    scheduler_snapshot.by_id[dependency_id].envelope.status
+                    for dependency_id in record.envelope.dependency_task_ids
+                    if dependency_id in scheduler_snapshot.by_id
+                }
+                if dependency_statuses.intersection(
+                    {
+                        TaskStatus.FAILED,
+                        TaskStatus.CANCELLED,
+                        TaskStatus.PRUNED,
+                    }
+                ):
+                    dependency_blocked.append(record.task_id)
             elif status == TaskStatus.FAILED:
                 failed.append(record.task_id)
             elif status == TaskStatus.WAITING_APPROVAL:
@@ -181,6 +221,23 @@ class ConvergenceEvaluator:
                 now=self.clock(),
             )
         )
+        max_run_tokens = self.policy.run_budget.max_tokens
+        if (
+            not budget_exhausted
+            and max_run_tokens is not None
+            and not active
+            and not runnable
+            and (
+                max_run_tokens
+                - usage.input_tokens
+                - usage.output_tokens
+                <= self.policy.minimum_replan_token_reserve
+            )
+        ):
+            # A replan is itself a model turn and every admitted Worker must
+            # retain room for read -> extract -> bounded repair. Stop before
+            # scheduling work that can only overrun the authoritative budget.
+            budget_exhausted = True
         prior = self.coordination.convergence_decisions(run_id)
         previous_low_gain = (
             prior[-1].snapshot.low_gain_cycles
@@ -204,8 +261,12 @@ class ConvergenceEvaluator:
             coverage_gap_section_ids=tuple(gaps),
             blocked_high_impact_claim_ids=blocked,
             severe_conflict_ids=severe,
+            verified_claim_count=len(verified_claim_ids),
+            verified_citation_count=verified_citation_count,
             active_task_ids=tuple(active),
             pending_task_ids=tuple(pending),
+            runnable_task_ids=tuple(runnable),
+            dependency_blocked_task_ids=tuple(dependency_blocked),
             failed_task_ids=tuple(failed),
             waiting_approval_task_ids=tuple(waiting),
             low_gain_cycles=low_gain_cycles,
@@ -289,7 +350,7 @@ class ConvergenceEvaluator:
                     "before it may continue.",
                 ),
             )
-        if snapshot.active_task_ids or snapshot.pending_task_ids:
+        if snapshot.active_task_ids or snapshot.runnable_task_ids:
             if snapshot.cycle + 1 >= self.policy.max_cycles:
                 return (
                     ConvergenceAction.STOP_MAX_CYCLES,
@@ -303,7 +364,6 @@ class ConvergenceEvaluator:
             snapshot.coverage_gap_section_ids
             or snapshot.blocked_high_impact_claim_ids
             or snapshot.severe_conflict_ids
-            or snapshot.failed_task_ids
         )
         if semantically_complete:
             return (
@@ -311,6 +371,20 @@ class ConvergenceEvaluator:
                 (
                     "All required section, citation, high-impact claim, "
                     "conflict, and task gates passed.",
+                ),
+            )
+        if (
+            snapshot.cycle >= self.policy.max_gap_replan_cycles
+            and snapshot.verified_claim_count
+            >= self.policy.minimum_reportable_verified_claims
+            and snapshot.verified_citation_count > 0
+        ):
+            return (
+                ConvergenceAction.COMPLETE_WITH_GAPS,
+                (
+                    "The bounded semantic-gap replan limit was reached; "
+                    "verified claims remain reportable and every unresolved "
+                    "claim must be disclosed as an evidence gap.",
                 ),
             )
         if snapshot.cycle + 1 >= self.policy.max_cycles:
@@ -585,6 +659,14 @@ class ResearchCoordinator:
         root_task = root_task.model_copy(
             update={
                 "assigned_actor_id": self.supervisor.worker_id,
+                # The durable root is leased once per Supervisor cycle and
+                # once more to commit the terminal convergence artifact.  A
+                # caller-provided task retry default must not underfund this
+                # control-plane lifecycle.
+                "max_attempts": max(
+                    root_task.max_attempts,
+                    self.convergence.policy.max_cycles + 1,
+                ),
                 "constraints": self._supervisor_constraints(
                     root_task,
                     cycle=0,
@@ -607,6 +689,7 @@ class ResearchCoordinator:
                 return await self._outcome(prior[-1])
         if prior and prior[-1].action in {
             ConvergenceAction.COMPLETE,
+            ConvergenceAction.COMPLETE_WITH_GAPS,
             ConvergenceAction.STOP_LOW_GAIN,
             ConvergenceAction.STOP_BUDGET,
             ConvergenceAction.STOP_MAX_CYCLES,
@@ -692,7 +775,16 @@ class ResearchCoordinator:
             await self.evidence.engine.verify_run(
                 root_task.run_id,
                 task_id=root_task.task_id,
-                repair_round=cycle,
+                repair_round=min(
+                    cycle,
+                    int(
+                        getattr(
+                            getattr(self.evidence.engine, "policy", None),
+                            "max_repair_rounds",
+                            cycle,
+                        )
+                    ),
+                ),
             )
             latest_gain = sum(
                 item.information_gain for item in cycle_results
@@ -707,6 +799,7 @@ class ResearchCoordinator:
             )
             if decision.action in {
                 ConvergenceAction.COMPLETE,
+                ConvergenceAction.COMPLETE_WITH_GAPS,
                 ConvergenceAction.STOP_LOW_GAIN,
                 ConvergenceAction.STOP_BUDGET,
                 ConvergenceAction.STOP_MAX_CYCLES,
@@ -724,7 +817,28 @@ class ResearchCoordinator:
                 )
             cycle += 1
             if decision.action == ConvergenceAction.REPLAN:
+                await self._cancel_dependency_blocked(decision)
                 await self._prepare_supervisor(root_task, cycle, decision)
+
+    async def _cancel_dependency_blocked(
+        self,
+        decision: ConvergenceDecision,
+    ) -> None:
+        for task_id in decision.snapshot.dependency_blocked_task_ids:
+            await self.scheduler.cancel_task(
+                task_id,
+                actor_id=self.actor_id,
+                reason=(
+                    "A dependency failed or was cancelled; the Supervisor "
+                    "will replace this blocked path during replanning."
+                ),
+                mutation_id=_stable_id(
+                    "mutation",
+                    decision.decision_id,
+                    task_id,
+                    "cancel_dependency_blocked",
+                ),
+            )
 
     async def _ensure_run(
         self,
@@ -805,12 +919,104 @@ class ResearchCoordinator:
         cycle: int,
         previous: ConvergenceDecision | None,
     ) -> dict[str, Any]:
+        repository = self.evidence.knowledge.repository
+
+        def listed(name: str, limit: int) -> tuple[Any, ...]:
+            collection = getattr(repository, name, None)
+            operation = getattr(collection, "list", None)
+            if not callable(operation):
+                return ()
+            try:
+                return tuple(operation(root_task.run_id, limit=limit))
+            except TypeError:
+                return tuple(operation(root_task.run_id))[:limit]
+
+        sources = listed("sources", 50)
+        facts = listed("facts", 1_000)
+        claims = listed("claims", 1_000)
+        evidence = listed("evidence", 1_000)
+        conflicts = listed("conflicts", 1_000)
+        known_source_candidates = [
+            {
+                "source_id": item.source_id,
+                "url": item.canonical_url,
+                "title": item.title or "",
+                "source_level": item.source_level.value,
+                "authority_score": item.authority_score,
+                "artifact_ids": list(item.provenance.source_artifact_ids),
+            }
+            for item in sorted(
+                sources,
+                key=lambda item: (
+                    -item.authority_score,
+                    item.canonical_url,
+                ),
+            )[:12]
+        ]
+        depth = str(root_task.constraints.get("depth") or "standard")
+        base_task_limit = {
+            "quick": 4,
+            "standard": 6,
+            "deep": 10,
+        }.get(depth, 6)
+        prior_usage = (
+            previous.snapshot.budget_usage
+            if previous is not None
+            else BudgetUsage()
+        )
+        max_run_tokens = self.convergence.policy.run_budget.max_tokens
+        remaining_tokens = (
+            max(
+                0,
+                max_run_tokens
+                - prior_usage.input_tokens
+                - prior_usage.output_tokens,
+            )
+            if max_run_tokens is not None
+            else None
+        )
+        budget_task_limit = base_task_limit
+        if remaining_tokens is not None:
+            schedulable_tokens = max(
+                0,
+                remaining_tokens
+                - self.convergence.policy.minimum_replan_token_reserve,
+            )
+            budget_task_limit = max(
+                1,
+                schedulable_tokens
+                // self.convergence.policy.estimated_tokens_per_planned_task,
+            )
+        max_tasks_per_plan = min(base_task_limit, budget_task_limit)
         context = {
             "cycle": cycle,
             "objective": root_task.goal,
             "allow_stop": False,
-            "max_tasks_per_plan": 32,
+            "max_tasks_per_plan": max_tasks_per_plan,
+            "minimum_model_calls_per_extraction_task": 4,
+            "minimum_tokens_per_extraction_task": 64_000,
+            "maximum_claims_per_extract": 3,
+            "remaining_run_tokens": remaining_tokens,
+            "reserved_replan_tokens": (
+                self.convergence.policy.minimum_replan_token_reserve
+            ),
+            "estimated_tokens_per_planned_task": (
+                self.convergence.policy.estimated_tokens_per_planned_task
+            ),
             "allowed_worker_ids": list(self.worker_pool.runners),
+            "knowledge_summary": {
+                "source_count": len(sources),
+                "fact_count": len(facts),
+                "claim_count": len(claims),
+                "evidence_count": len(evidence),
+                "conflict_count": len(conflicts),
+                "required_transition": (
+                    "extract_known_sources"
+                    if sources and not (facts or claims or evidence)
+                    else "resolve_semantic_gaps"
+                ),
+            },
+            "known_source_candidates": known_source_candidates,
         }
         if previous is not None:
             context.update(
@@ -825,6 +1031,7 @@ class ResearchCoordinator:
         return {
             **root_task.constraints,
             "supervisor_context": context,
+            "known_source_candidates": known_source_candidates,
             "research_boundary": {
                 "report_writing": False,
                 "provider_access_for_supervisor": False,
@@ -886,7 +1093,50 @@ class ResearchCoordinator:
                             "cancel_task",
                         ),
                     )
+            current = await self.scheduler.snapshot(root_task.run_id)
+            if current.control.status == RunControlStatus.ACTIVE:
+                await self.scheduler.cancel_run(
+                    root_task.run_id,
+                    actor_id=self.actor_id,
+                    reason="; ".join(decision.reasons),
+                    mutation_id=_stable_id(
+                        "mutation",
+                        decision.decision_id,
+                        "cancel_incomplete_run",
+                    ),
+                )
+            return await self._outcome(
+                decision,
+                merge_artifact_id=merge_artifact_id,
+            )
 
+        if decision.action not in {
+            ConvergenceAction.COMPLETE,
+            ConvergenceAction.COMPLETE_WITH_GAPS,
+        }:
+            raise RuntimeError(
+                f"unsupported research terminal action: {decision.action.value}"
+            )
+
+        for record in snapshot.tasks:
+            if (
+                record.task_id != root_task.task_id
+                and record.envelope.status not in _TERMINAL_TASK_STATUSES
+            ):
+                await self.scheduler.cancel_task(
+                    record.task_id,
+                    actor_id=self.actor_id,
+                    reason=(
+                        "Mandatory semantic evidence gates passed; this "
+                        "unfinished path is superseded by verified evidence."
+                    ),
+                    mutation_id=_stable_id(
+                        "mutation",
+                        decision.decision_id,
+                        record.task_id,
+                        "cancel_semantically_superseded",
+                    ),
+                )
         await self._complete_root(root_task, decision)
         current = await self.scheduler.snapshot(root_task.run_id)
         if (
@@ -916,7 +1166,17 @@ class ResearchCoordinator:
         record = snapshot.by_id[root_task.task_id]
         if record.envelope.status == TaskStatus.COMPLETED:
             return
-        if record.envelope.status == TaskStatus.PAUSED:
+        if record.envelope.status == TaskStatus.FAILED:
+            await self.scheduler.retry(
+                root_task.task_id,
+                actor_id=self.actor_id,
+                mutation_id=_stable_id(
+                    "mutation",
+                    decision.decision_id,
+                    "retry_root_for_completion",
+                ),
+            )
+        elif record.envelope.status == TaskStatus.PAUSED:
             await self.scheduler.resume_task(
                 root_task.task_id,
                 actor_id=self.actor_id,
@@ -1003,6 +1263,13 @@ class ResearchCoordinator:
                 item.task_id
                 for item in snapshot.tasks
                 if item.envelope.status == TaskStatus.FAILED
+            ),
+            error_refs=tuple(
+                dict.fromkeys(
+                    item.error_ref
+                    for item in snapshot.tasks
+                    if item.error_ref is not None
+                )
             ),
             waiting_approval_task_ids=tuple(
                 item.task_id

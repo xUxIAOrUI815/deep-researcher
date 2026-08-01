@@ -44,6 +44,7 @@ class ConvergenceAction(str, Enum):
     REPLAN = "replan"
     AWAIT_APPROVAL = "await_approval"
     COMPLETE = "complete"
+    COMPLETE_WITH_GAPS = "complete_with_gaps"
     STOP_LOW_GAIN = "stop_low_gain"
     STOP_BUDGET = "stop_budget"
     STOP_MAX_CYCLES = "stop_max_cycles"
@@ -348,6 +349,18 @@ class ConvergencePolicy(ContractModel):
     max_low_gain_cycles: int = Field(default=2, ge=1, le=100)
     max_cycles: int = Field(default=12, ge=1, le=1000)
     run_budget: Budget
+    minimum_replan_token_reserve: int = Field(
+        default=72_000,
+        ge=0,
+        le=10_000_000,
+    )
+    estimated_tokens_per_planned_task: int = Field(
+        default=48_000,
+        ge=1_000,
+        le=1_000_000,
+    )
+    max_gap_replan_cycles: int = Field(default=3, ge=0, le=100)
+    minimum_reportable_verified_claims: int = Field(default=1, ge=1, le=1000)
     stop_on_any_severe_conflict: bool = True
     require_no_high_impact_blockers: bool = True
 
@@ -367,8 +380,12 @@ class ConvergenceSnapshot(ContractModel):
     coverage_gap_section_ids: tuple[str, ...]
     blocked_high_impact_claim_ids: tuple[str, ...]
     severe_conflict_ids: tuple[str, ...]
+    verified_claim_count: int = Field(default=0, ge=0)
+    verified_citation_count: int = Field(default=0, ge=0)
     active_task_ids: tuple[str, ...]
     pending_task_ids: tuple[str, ...]
+    runnable_task_ids: tuple[str, ...] = ()
+    dependency_blocked_task_ids: tuple[str, ...] = ()
     failed_task_ids: tuple[str, ...]
     waiting_approval_task_ids: tuple[str, ...]
     low_gain_cycles: int = Field(ge=0)
@@ -387,6 +404,8 @@ class ConvergenceSnapshot(ContractModel):
         "severe_conflict_ids",
         "active_task_ids",
         "pending_task_ids",
+        "runnable_task_ids",
+        "dependency_blocked_task_ids",
         "failed_task_ids",
         "waiting_approval_task_ids",
     )
@@ -431,6 +450,7 @@ class ResearchRunOutcome(ContractModel):
     merged_result_artifact_ids: tuple[str, ...] = ()
     completed_task_ids: tuple[str, ...] = ()
     failed_task_ids: tuple[str, ...] = ()
+    error_refs: tuple[str, ...] = ()
     waiting_approval_task_ids: tuple[str, ...] = ()
     usage: BudgetUsage = Field(default_factory=BudgetUsage)
     completed_at: datetime = Field(default_factory=utc_now)
@@ -441,6 +461,7 @@ class ResearchRunOutcome(ContractModel):
         "merged_result_artifact_ids",
         "completed_task_ids",
         "failed_task_ids",
+        "error_refs",
         "waiting_approval_task_ids",
     )
     @classmethod

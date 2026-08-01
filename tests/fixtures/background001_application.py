@@ -22,7 +22,7 @@ from deep_researcher.providers import (
 
 
 STATEMENT = "Verified benchmark is 42."
-SOURCE_URL = "https://example.com/verified-source"
+SOURCE_URL = "https://research.example.edu/verified-source"
 
 
 class DeterministicSearchAdapter:
@@ -77,7 +77,7 @@ class DeterministicSupervisorModel:
                         ),
                         "expected_output_schema": "ResearchWorkerResult@1",
                         "budget": {
-                            "max_tokens": 24_000,
+                            "max_tokens": 64_000,
                             "max_model_calls": 12,
                             "max_tool_calls": 16,
                             "max_search_calls": 6,

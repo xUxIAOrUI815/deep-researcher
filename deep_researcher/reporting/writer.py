@@ -5,7 +5,9 @@ from datetime import timedelta
 import hashlib
 import json
 import re
+from copy import deepcopy
 from typing import Any
+from collections.abc import Awaitable, Callable
 
 from pydantic import ValidationError
 
@@ -87,6 +89,11 @@ def _constraints(request: ModelRequest) -> dict[str, Any]:
     return {}
 
 
+_EMPTY_VERIFIED_SECTION_NOTICE = (
+    "本节在当前已验证证据包中没有可引用的事实性陈述。"
+)
+
+
 def _payload(response: ModelResponse, key: str) -> dict[str, Any]:
     value: Any = response.structured
     if isinstance(value, dict) and key in value:
@@ -112,12 +119,18 @@ class SynthesisWriterModelAdapter(ModelAdapter):
         *,
         artifact_store: ArtifactStore,
         max_proposal_repairs: int = 2,
+        proposal_validator: Callable[
+            [WriterDraftProposal, WriterEvidencePacket, str],
+            Awaitable[BudgetUsage],
+        ]
+        | None = None,
     ) -> None:
         if max_proposal_repairs < 0:
             raise ValueError("max_proposal_repairs cannot be negative")
         self.model = model
         self.artifact_store = artifact_store
         self.max_proposal_repairs = max_proposal_repairs
+        self.proposal_validator = proposal_validator
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         specialized = self._request(request)
@@ -183,6 +196,16 @@ class SynthesisWriterModelAdapter(ModelAdapter):
                     "disclose_every_gap": True,
                     "disclose_every_conflict": True,
                     "do_not_add_external_facts": True,
+                    "required_gap_ids_by_section": {
+                        section.section_id: list(section.gap_claim_ids)
+                        for section in packet.sections
+                    },
+                    "required_conflict_ids_by_section": {
+                        section.section_id: list(section.conflict_ids)
+                        for section in packet.sections
+                    },
+                    "empty_id_list_means_disclose_none": True,
+                    "never_invent_claim_or_conflict_ids": True,
                 },
             },
         }
@@ -219,10 +242,30 @@ class SynthesisWriterModelAdapter(ModelAdapter):
     ) -> ModelResponse:
         current = response
         usage = [*usage_items, response.usage]
+        packet_payload = read_json_artifact(
+            self.artifact_store,
+            str(_constraints(request)["evidence_packet_artifact_id"]),
+        )
+        packet = WriterEvidencePacket.model_validate(
+            packet_payload.get("packet"),
+            strict=False,
+        )
         for attempt in range(self.max_proposal_repairs + 1):
             try:
-                proposal = self._parse(request, current)
-            except (ValidationError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                proposal = self._parse(request, current, packet)
+                if self.proposal_validator is not None:
+                    await self.proposal_validator(
+                        proposal,
+                        packet,
+                        request.task_id,
+                    )
+            except (
+                ValidationError,
+                WriterTraceabilityError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as exc:
                 if attempt >= self.max_proposal_repairs:
                     raise ModelInvocationError(
                         "Writer proposal remained invalid after bounded repair: "
@@ -272,15 +315,64 @@ class SynthesisWriterModelAdapter(ModelAdapter):
     def _parse(
         request: ModelRequest,
         response: ModelResponse,
+        packet: WriterEvidencePacket,
     ) -> WriterDraftProposal:
         constraints = _constraints(request)
-        value = _payload(response, "proposal")
+        value = deepcopy(_payload(response, "proposal"))
+        SynthesisWriterModelAdapter._remove_untraceable_empty_section_narrative(
+            value,
+            packet,
+        )
         value.update(
             run_id=request.run_id,
             report_id=str(constraints["report_id"]),
             revision=int(constraints["revision"]),
         )
         return WriterDraftProposal.model_validate(value, strict=False)
+
+    @staticmethod
+    def _remove_untraceable_empty_section_narrative(
+        value: dict[str, Any],
+        packet: WriterEvidencePacket,
+    ) -> None:
+        """Discard model prose where the evidence packet permits no citation.
+
+        Report plans intentionally contain boundary sections such as the
+        executive summary and methodology.  When such a section has no
+        verified claims, a model cannot legally attach claim or citation IDs
+        to prose in that section.  Some providers nevertheless emit a
+        sentence with both ID lists empty.  That sentence must not be repaired
+        by borrowing unrelated evidence.  Remove only that exact, provably
+        untraceable shape; partially linked statements and statements in a
+        section with verified claims still fail normal validation.
+        """
+
+        empty_section_ids = {
+            section.section_id
+            for section in packet.sections
+            if not section.verified_claim_ids
+        }
+        sections = value.get("sections")
+        if not isinstance(sections, list):
+            return
+        for section in sections:
+            if (
+                not isinstance(section, dict)
+                or section.get("section_id") not in empty_section_ids
+            ):
+                continue
+            statements = section.get("statements")
+            if not isinstance(statements, list):
+                continue
+            section["statements"] = [
+                statement
+                for statement in statements
+                if not (
+                    isinstance(statement, dict)
+                    and not statement.get("claim_ids")
+                    and not statement.get("citation_ids")
+                )
+            ]
 
 
 class WriterTraceabilityError(ValueError):
@@ -306,6 +398,7 @@ class SynthesisWriterActionExecutor:
         self.policy = policy
         self.actor_id = actor_id
         self.clock = clock
+        self._validated_usage: dict[str, BudgetUsage] = {}
 
     async def execute(self, command: Command) -> RawObservation:
         if (
@@ -340,12 +433,15 @@ class SynthesisWriterActionExecutor:
             proposal.run_id,
             proposal.report_id,
         )
-        expected_revision = len(prior) + 1
-        if proposal.revision != expected_revision:
-            raise WriterTraceabilityError(
-                f"Writer revision must be {expected_revision}"
+        validation_key = self._validation_key(proposal, packet, command.task_id)
+        semantic_usage = self._validated_usage.pop(validation_key, None)
+        if semantic_usage is None:
+            semantic_usage = await self.validate_proposal(
+                proposal,
+                packet,
+                command.task_id,
             )
-        semantic_usage = await self._validate(proposal, packet, command.task_id)
+            self._validated_usage.pop(validation_key, None)
         markdown, entries, used_citation_ids = self._render(proposal, packet)
 
         fingerprint = hashlib.sha256(
@@ -506,6 +602,53 @@ class SynthesisWriterActionExecutor:
             started_at=started,
             completed_at=self.clock(),
         )
+
+    async def validate_proposal(
+        self,
+        proposal: WriterDraftProposal,
+        packet: WriterEvidencePacket,
+        task_id: str,
+    ) -> BudgetUsage:
+        if (
+            proposal.run_id != packet.run_id
+            or proposal.report_id != packet.report_id
+        ):
+            raise WriterTraceabilityError(
+                "Writer proposal and verified packet identities differ"
+            )
+        prior = self.reporting_store.revisions(
+            proposal.run_id,
+            proposal.report_id,
+        )
+        expected_revision = len(prior) + 1
+        if proposal.revision != expected_revision:
+            raise WriterTraceabilityError(
+                f"Writer revision must be {expected_revision}"
+            )
+        usage = await self._validate(proposal, packet, task_id)
+        self._validated_usage[
+            self._validation_key(proposal, packet, task_id)
+        ] = usage
+        return usage
+
+    @staticmethod
+    def _validation_key(
+        proposal: WriterDraftProposal,
+        packet: WriterEvidencePacket,
+        task_id: str,
+    ) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "proposal": proposal.model_dump(mode="json"),
+                    "packet_id": packet.packet_id,
+                    "task_id": task_id,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
     async def _validate(
         self,
@@ -738,6 +881,12 @@ class SynthesisWriterActionExecutor:
         lines = [f"# {proposal.title}", "", f"> 研究问题：{packet.research_question}"]
         for section in proposal.sections:
             lines.extend(("", f"## {section.title}", ""))
+            if (
+                not section.statements
+                and not section.gap_disclosures
+                and not section.conflict_disclosures
+            ):
+                lines.extend((_EMPTY_VERIFIED_SECTION_NOTICE, ""))
             for statement in section.statements:
                 text = statement.text.rstrip()
                 punctuation = (
@@ -849,10 +998,13 @@ class SynthesisWriterActionExecutor:
             section_markdown = "\n".join(
                 [
                     f"## {section_proposal.title}",
-                    *[
-                        statement.text
-                        for statement in section_proposal.statements
-                    ],
+                    *(
+                        [
+                            statement.text
+                            for statement in section_proposal.statements
+                        ]
+                        or [_EMPTY_VERIFIED_SECTION_NOTICE]
+                    ),
                 ]
             )
             section_artifact_id = _stable_id(

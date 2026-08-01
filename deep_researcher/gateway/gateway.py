@@ -42,6 +42,33 @@ from .state import SQLiteToolStateStore
 _T = TypeVar("_T")
 _SENSITIVE_KEY = re.compile(r"(authorization|api[_-]?key|access[_-]?token|password|secret|cookie|^token$)", re.I)
 _FORBIDDEN_KEY = {"chain_of_thought", "cot", "hidden_reasoning", "private_reasoning", "raw_model_response"}
+_UNSAFE_URI_SCHEMES = {
+    "data",
+    "dict",
+    "file",
+    "ftp",
+    "gopher",
+    "javascript",
+    "ldap",
+}
+_URL_FIELD_NAMES = {
+    "base_url",
+    "callback_url",
+    "canonical_url",
+    "endpoint",
+    "endpoints",
+    "href",
+    "link",
+    "links",
+    "redirect_url",
+    "source_url",
+    "uri",
+    "uris",
+    "url",
+    "urls",
+    "webhook",
+    "webhook_url",
+}
 
 
 def redact_gateway_value(value: Any) -> Any:
@@ -76,25 +103,47 @@ class PatternSafetyScanner:
         if len(encoded) > self.max_payload_bytes:
             return SafetyDecision(allowed=False, reason="payload exceeds the configured safety size limit", checks=("payload_size",))
         allow_private = bool(definition.metadata.get("allow_private_network", False))
-        violation = self._walk(value, depth=0, allow_private=allow_private)
+        violation = self._walk(
+            value,
+            depth=0,
+            allow_private=allow_private,
+            key_hint=None,
+        )
         if violation:
             return SafetyDecision(allowed=False, reason=f"{phase} safety scan rejected payload: {violation}", checks=("structure", "ssrf", "control_characters"))
         return SafetyDecision(allowed=True, reason=f"{phase} safety scan passed", checks=("structure", "ssrf", "control_characters"))
 
-    def _walk(self, value: Any, *, depth: int, allow_private: bool) -> str | None:
+    def _walk(
+        self,
+        value: Any,
+        *,
+        depth: int,
+        allow_private: bool,
+        key_hint: str | None,
+    ) -> str | None:
         if depth > self.max_depth:
             return "payload nesting is too deep"
         if isinstance(value, dict):
             for key, item in value.items():
                 if "\x00" in str(key):
                     return "object key contains a NUL byte"
-                violation = self._walk(item, depth=depth + 1, allow_private=allow_private)
+                violation = self._walk(
+                    item,
+                    depth=depth + 1,
+                    allow_private=allow_private,
+                    key_hint=str(key),
+                )
                 if violation:
                     return violation
             return None
         if isinstance(value, (list, tuple)):
             for item in value:
-                violation = self._walk(item, depth=depth + 1, allow_private=allow_private)
+                violation = self._walk(
+                    item,
+                    depth=depth + 1,
+                    allow_private=allow_private,
+                    key_hint=key_hint,
+                )
                 if violation:
                     return violation
             return None
@@ -102,14 +151,24 @@ class PatternSafetyScanner:
             return None
         if any(ord(character) < 32 and character not in "\r\n\t" for character in value):
             return "string contains disallowed control characters"
-        parsed = urlsplit(value)
-        if not parsed.scheme:
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+        except ValueError:
+            if self._is_url_field(key_hint):
+                return "URL field is malformed"
             return None
-        if parsed.scheme not in {"http", "https"}:
-            return f"URL scheme is not allowed: {parsed.scheme}"
-        if allow_private or not parsed.hostname:
+        scheme = parsed.scheme.casefold()
+        is_url_field = self._is_url_field(key_hint)
+        if scheme in _UNSAFE_URI_SCHEMES:
+            return f"URL scheme is not allowed: {scheme}"
+        if is_url_field and scheme and scheme not in {"http", "https"}:
+            return f"URL scheme is not allowed: {scheme}"
+        if scheme not in {"http", "https"} and hostname is None:
             return None
-        hostname = parsed.hostname.casefold()
+        if allow_private or not hostname:
+            return None
+        hostname = hostname.casefold()
         if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
             return "loopback host is not allowed"
         try:
@@ -119,6 +178,22 @@ class PatternSafetyScanner:
         if not address.is_global:
             return "private, loopback, link-local, or reserved address is not allowed"
         return None
+
+    @staticmethod
+    def _is_url_field(key_hint: str | None) -> bool:
+        if key_hint is None:
+            return False
+        normalized = re.sub(
+            r"[^a-z0-9]+",
+            "_",
+            key_hint.casefold(),
+        ).strip("_")
+        return (
+            normalized in _URL_FIELD_NAMES
+            or normalized.endswith(
+                ("_url", "_urls", "_uri", "_uris", "_href", "_link")
+            )
+        )
 
 
 class ProtocolToolGateway:
@@ -232,6 +307,7 @@ class ProtocolToolGateway:
         total_usage = BudgetUsage()
         total_attempts = 0
         fallback_chain: list[str] = []
+        candidate_failures: list[ToolExecutionResult] = []
         final: ToolExecutionResult | None = None
         for index, candidate_name in enumerate(candidates):
             candidate_version = definition.version if index == 0 else None
@@ -261,8 +337,41 @@ class ProtocolToolGateway:
             )
             if final.success:
                 break
+            candidate_failures.append(final)
+            self._audit(
+                command,
+                "tool.candidate_failed",
+                {
+                    "tool": f"{final.tool_name}@{final.tool_version}",
+                    "candidate_index": index,
+                    "error": (
+                        final.error.model_dump(mode="json")
+                        if final.error is not None
+                        else None
+                    ),
+                    "attempts": final.attempts,
+                },
+            )
 
         assert final is not None
+        if not final.success and candidate_failures:
+            first = candidate_failures[0]
+            final = final.model_copy(
+                update={
+                    "tool_name": first.tool_name,
+                    "tool_version": first.tool_version,
+                    "protocol": first.protocol,
+                    "error": first.error,
+                    "metadata": {
+                        **final.metadata,
+                        "candidate_errors": [
+                            item.error.model_dump(mode="json")
+                            for item in candidate_failures
+                            if item.error is not None
+                        ],
+                    },
+                }
+            )
         if final.success and definition.idempotent and definition.cache_ttl_seconds is not None:
             self.state_store.put_cache(cache_key, final, ttl_seconds=definition.cache_ttl_seconds)
         self.state_store.complete_idempotency(command.idempotency_key, final)

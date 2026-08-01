@@ -176,7 +176,15 @@ class OpenAICompatibleModelAdapter:
             payload = response.json()
             choice = payload["choices"][0]
             content = str(choice["message"].get("content") or "")
-            structured = self._structured(content)
+            try:
+                structured = self._structured(content)
+            except json.JSONDecodeError:
+                # Preserve malformed provider JSON as an invalid candidate so
+                # the kernel's bounded schema-repair path can correct it.  A
+                # parse failure is a response-shape problem, not a permanent
+                # transport/provider failure, and discarding the raw candidate
+                # would make the configured repair budget unreachable.
+                structured = None
             usage = payload.get("usage") or {}
             input_tokens = int(
                 usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0

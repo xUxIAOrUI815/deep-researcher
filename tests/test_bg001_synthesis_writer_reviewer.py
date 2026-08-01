@@ -599,6 +599,89 @@ async def test_packet_turns_unverified_required_claim_into_explicit_gap(
 
 
 @pytest.mark.asyncio
+async def test_writer_repairs_invented_gap_to_exact_persisted_gap_set(
+    tmp_path,
+    evidence_runtime,
+):
+    seed = _seed(
+        evidence_runtime,
+        run_id="run_writer_exact_gap_repair",
+        high_impact=False,
+    )
+    await evidence_runtime.engine.verify_run(seed.run_id)
+    gap_claim = Claim(
+        claim_id=f"claim_gap_{seed.run_id}",
+        statement="This required claim lacks verified support.",
+        confidence=0.2,
+        importance=0.9,
+        high_impact=True,
+        provenance=_provenance(seed.run_id),
+    )
+    repository = evidence_runtime.knowledge.repository
+    repository.claims.save(gap_claim)
+    section = repository.sections.require(seed.section_id)
+    repository.sections.save(
+        section.model_copy(
+            update={
+                "claim_ids": (*section.claim_ids, gap_claim.claim_id),
+                "required_claim_ids": (
+                    *section.required_claim_ids,
+                    gap_claim.claim_id,
+                ),
+            }
+        )
+    )
+    bad = _writer_response(seed, revision=1)
+    bad.structured["proposal"]["sections"][0]["gap_disclosures"] = [
+        {
+            "claim_id": "claim_invented_gap_identity",
+            "text": "Invented gap identity must be rejected.",
+        }
+    ]
+    repaired = _writer_response(seed, revision=1)
+    repaired.structured["proposal"]["sections"][0]["gap_disclosures"] = [
+        {
+            "claim_id": gap_claim.claim_id,
+            "text": "The required claim remains explicitly unsupported.",
+        }
+    ]
+    writer_model = QueueModel([bad], repairs=[repaired])
+    runtime = build_reporting_runtime(
+        tmp_path / "reporting-exact-gap-repair",
+        evidence=evidence_runtime,
+        writer_model=writer_model,
+        reviewer_model=QueueModel([]),
+        event_sink=EventCollector(),
+        policy=_report_policy(),
+    )
+    try:
+        packet = runtime.packet_builder.build(seed.report_id)
+        written = await runtime.writer.write(
+            packet=packet,
+            title="Verified reporting",
+            revision=1,
+            budget=_budget(),
+        )
+        assert written.revision.revision == 1
+        assert len(writer_model.repair_requests) == 1
+        assert "every and only its gaps" in writer_model.repair_requests[0][0]
+        evidence_message = next(
+            item["content"]
+            for item in writer_model.requests[0].messages
+            if isinstance(item.get("content"), dict)
+            and item["content"].get("schema") == "WriterEvidencePacket@1"
+        )
+        assert evidence_message["rules"][
+            "required_gap_ids_by_section"
+        ] == {seed.section_id: [gap_claim.claim_id]}
+        assert len(
+            runtime.store.revisions(seed.run_id, seed.report_id)
+        ) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_writer_presents_conflicts_and_uncertainty_with_citations(
     tmp_path,
     evidence_runtime,
@@ -709,6 +792,73 @@ async def test_writer_rejects_unverified_or_insufficiently_cited_statement(
                 budget=_budget(),
             )
         assert runtime.store.revisions(seed.run_id, seed.report_id) == ()
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_writer_drops_uncitable_narrative_only_for_empty_packet_section(
+    tmp_path,
+    evidence_runtime,
+):
+    seed = _seed(evidence_runtime, run_id="run_writer_empty_section")
+    repository = evidence_runtime.knowledge.repository
+    empty_section = Section(
+        section_id=f"section_empty_{seed.run_id}",
+        report_id=seed.report_id,
+        title="Sources and methodology",
+        goal="Describe the evidence boundary without external facts.",
+        order=1,
+        provenance=_provenance(seed.run_id),
+    )
+    repository.sections.save(empty_section)
+    report = repository.reports.require(seed.report_id)
+    repository.reports.save(
+        report.model_copy(
+            update={"section_ids": (*report.section_ids, empty_section.section_id)}
+        )
+    )
+    await evidence_runtime.engine.verify_run(seed.run_id)
+
+    response = _writer_response(seed, revision=1)
+    response.structured["proposal"]["sections"].append(
+        {
+            "section_id": empty_section.section_id,
+            "title": empty_section.title,
+            "statements": [
+                {
+                    "statement_id": f"statement_empty_{seed.run_id}",
+                    "text": "No additional evidence was found.",
+                    "claim_ids": [],
+                    "citation_ids": [],
+                    "certainty": StatementCertainty.QUALIFIED.value,
+                }
+            ],
+            "gap_disclosures": [],
+            "conflict_disclosures": [],
+        }
+    )
+    runtime = build_reporting_runtime(
+        tmp_path / "reporting-empty-section",
+        evidence=evidence_runtime,
+        writer_model=QueueModel([response]),
+        reviewer_model=QueueModel([]),
+        event_sink=EventCollector(),
+        policy=_report_policy(),
+    )
+    try:
+        packet = runtime.packet_builder.build(seed.report_id)
+        written = await runtime.writer.write(
+            packet=packet,
+            title="Verified reporting",
+            revision=1,
+            budget=_budget(),
+        )
+        assert "本节在当前已验证证据包中没有可引用的事实性陈述。" in (
+            written.revision.markdown
+        )
+        assert "No additional evidence was found." not in written.revision.markdown
+        assert response.structured["proposal"]["sections"][1]["statements"]
     finally:
         runtime.close()
 

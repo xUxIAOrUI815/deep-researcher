@@ -110,6 +110,24 @@ class SchedulerTargetedResearchDispatcher:
                 "current run is terminal and must be explicitly resumed or "
                 "forked by the integration layer."
             )
+        root_record = next(
+            (
+                item
+                for item in snapshot.tasks
+                if item.envelope.parent_task_id is None
+            ),
+            None,
+        )
+        inherited_worker_constraints = {
+            key: root_record.envelope.constraints[key]
+            for key in (
+                "available_worker_tools",
+                "worker_tool_contracts",
+                "evidence_rules",
+            )
+            if root_record is not None
+            and key in root_record.envelope.constraints
+        }
         actions = tuple(
             item
             for item in decision.repair_actions
@@ -149,6 +167,7 @@ class SchedulerTargetedResearchDispatcher:
                                 )
                             ),
                             round_no=round_no,
+                            worker_constraints=inherited_worker_constraints,
                         )
                     )
             for section_id in action.section_ids:
@@ -167,6 +186,7 @@ class SchedulerTargetedResearchDispatcher:
                             f"Reviewer findings for section {section_id}."
                         ),
                         round_no=round_no,
+                        worker_constraints=inherited_worker_constraints,
                     )
                 )
         if not tasks:
@@ -184,6 +204,7 @@ class SchedulerTargetedResearchDispatcher:
                         "Reviewer completeness finding."
                     ),
                     round_no=round_no,
+                    worker_constraints=inherited_worker_constraints,
                 )
             )
         unique = {item.task_id: item for item in tasks}
@@ -204,7 +225,10 @@ class SchedulerTargetedResearchDispatcher:
         await self.evidence.engine.verify_run(
             packet.run_id,
             task_id=next(iter(unique)),
-            repair_round=round_no,
+            repair_round=min(
+                round_no,
+                self.evidence.engine.policy.max_repair_rounds,
+            ),
         )
         refreshed = self.packet_builder.build(report_id)
         return TargetedResearchDispatch(
@@ -224,6 +248,7 @@ class SchedulerTargetedResearchDispatcher:
         title: str,
         goal: str,
         round_no: int,
+        worker_constraints: dict[str, object],
     ) -> TaskEnvelope:
         return TaskEnvelope(
             task_id=_stable_id(
@@ -238,6 +263,7 @@ class SchedulerTargetedResearchDispatcher:
             title=title,
             goal=goal,
             constraints={
+                **worker_constraints,
                 "report_loop": True,
                 "report_id": packet.report_id,
                 "review_id": decision.review_id,

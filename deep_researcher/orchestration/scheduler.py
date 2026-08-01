@@ -405,7 +405,7 @@ class NativeEventSourcedScheduler:
                 self._require_lease(record, worker_id, now)
                 usage = self._combine_usage(record.budget_usage, completion.usage)
                 budget_candidate = record.model_copy(update={"budget_usage": usage})
-                if self._scheduling_budget_exhausted(budget_candidate, now=now):
+                if self._scheduling_budget_overrun(budget_candidate, now=now):
                     completed = self._transition(
                         record,
                         TaskStatus.FAILED,
@@ -499,12 +499,19 @@ class NativeEventSourcedScheduler:
                 record = self._task(task_id, connection)
                 now = self.clock()
                 self._require_lease(record, worker_id, now)
+                reported_usage = usage or BudgetUsage()
+                combined_usage = self._combine_usage(
+                    record.budget_usage,
+                    reported_usage,
+                )
+                if reported_usage.errors == 0:
+                    combined_usage = combined_usage.plus(errors=1)
                 failed = self._transition(
                     record,
                     TaskStatus.FAILED,
                     now,
                     error_ref=error_ref,
-                    budget_usage=self._combine_usage(record.budget_usage, usage or BudgetUsage()).plus(errors=1),
+                    budget_usage=combined_usage,
                 )
                 control = self._advance(self._mutable_control(record.run_id, connection), now)
                 self._persist_event(connection, control, SchedulerEventType.TASK_FAILED, worker_id, mutation_id, fingerprint, [failed], task_id)
@@ -875,7 +882,19 @@ class NativeEventSourcedScheduler:
                 ]
                 deadline = min(deadlines) if deadlines else None
                 exhausted = self._scheduling_budget_exhausted(updated, now=now)
-                if deadline is not None and deadline <= now:
+                if (
+                    updated.envelope.status == TaskStatus.READY
+                    and updated.envelope.attempt
+                    >= updated.envelope.max_attempts
+                ):
+                    updated = self._transition(
+                        updated,
+                        TaskStatus.FAILED,
+                        now,
+                        error_ref="error_lease_attempts_exhausted",
+                    )
+                    failed_ids.append(item.task_id)
+                elif deadline is not None and deadline <= now:
                     updated = self._transition(updated, TaskStatus.FAILED, now, error_ref="error_deadline_reached")
                     failed_ids.append(item.task_id)
                 elif exhausted:
@@ -1085,6 +1104,32 @@ class NativeEventSourcedScheduler:
         if record.budget_usage.errors == 0:
             exhausted.discard(BudgetDimension.ERRORS)
         return bool(exhausted)
+
+    @staticmethod
+    def _scheduling_budget_overrun(
+        record: TaskRecord,
+        *,
+        now: datetime,
+    ) -> bool:
+        """Reject completed work only when it crossed, not reached, a limit."""
+        budget = record.envelope.budget
+        usage = record.budget_usage
+        checks = (
+            (usage.total_tokens, budget.max_tokens),
+            (usage.cost_usd, budget.max_cost_usd),
+            (usage.wall_time_seconds, budget.max_wall_time_seconds),
+            (usage.model_calls, budget.max_model_calls),
+            (usage.tool_calls, budget.max_tool_calls),
+            (usage.search_calls, budget.max_search_calls),
+            (usage.retries, budget.max_retries),
+            (usage.errors, budget.max_errors),
+        )
+        if any(
+            limit is not None and actual > limit
+            for actual, limit in checks
+        ):
+            return True
+        return budget.deadline is not None and now >= budget.deadline
 
     @staticmethod
     def _dedupe_records(records: list[TaskRecord]) -> list[TaskRecord]:

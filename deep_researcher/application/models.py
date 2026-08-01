@@ -271,6 +271,22 @@ class ConsoleRoleView(BaseModel):
     model_config = {"strict": True}
 
 
+class ConsoleCausalErrorView(BaseModel):
+    sequence_no: int = 0
+    error_id: str | None = None
+    event_type: str
+    actor_id: str = ""
+    task_id: str | None = None
+    category: str
+    code: str
+    message: str
+    retryable: bool = False
+    fatal: bool = False
+    is_primary: bool = False
+
+    model_config = {"strict": True}
+
+
 class ConsoleRuntimeView(BaseModel):
     status: str
     current_stage: str
@@ -282,6 +298,7 @@ class ConsoleRuntimeView(BaseModel):
     decision_reasons: tuple[str, ...] = ()
     error_code: str | None = None
     error_message: str | None = None
+    causal_errors: tuple[ConsoleCausalErrorView, ...] = ()
     progress: tuple[ConsoleProgressStep, ...] = ()
     roles: tuple[ConsoleRoleView, ...] = ()
 

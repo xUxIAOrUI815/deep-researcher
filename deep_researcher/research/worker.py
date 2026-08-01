@@ -18,6 +18,7 @@ from deep_researcher.contracts import (
     TaskKind,
     TaskResultStatus,
     TaskStatus,
+    StopReason,
     utc_now,
 )
 from deep_researcher.kernel import (
@@ -304,33 +305,47 @@ class ResearchWorkerActionExecutor:
         )
         source_artifacts = tuple(
             dict.fromkeys(
-                (
+                item
+                for item in (
                     *command.input_artifact_ids,
                     *observation.output_artifact_ids,
                 )
+                if item != artifact_id
             )
         )
-        self.artifact_store.put_json(
-            {
-                "schema": "ResearchCommandObservation@1",
-                "command": command.model_dump(mode="json"),
-                "observation": observation.model_dump(mode="json"),
-            },
-            redact=True,
-            kind=ArtifactKind.TOOL_RESULT,
-            producer_id=command.actor_id,
-            run_id=command.run_id,
-            task_id=command.task_id,
-            content_schema="ResearchCommandObservation@1",
-            source_artifact_ids=source_artifacts,
-            artifact_id=artifact_id,
-            idempotency_key=f"research-observation:{command.command_id}",
-            metadata={
-                "command_kind": command.kind.value,
-                "command_name": command.name,
-                "status": observation.status.value,
-            },
-        )
+        existing = self.artifact_store.get(artifact_id)
+        if existing is None:
+            self.artifact_store.put_json(
+                {
+                    "schema": "ResearchCommandObservation@1",
+                    "command": command.model_dump(mode="json"),
+                    "observation": observation.model_dump(mode="json"),
+                },
+                redact=True,
+                kind=ArtifactKind.TOOL_RESULT,
+                producer_id=command.actor_id,
+                run_id=command.run_id,
+                task_id=command.task_id,
+                content_schema="ResearchCommandObservation@1",
+                source_artifact_ids=source_artifacts,
+                artifact_id=artifact_id,
+                idempotency_key=f"research-observation:{command.command_id}",
+                metadata={
+                    "command_kind": command.kind.value,
+                    "command_name": command.name,
+                    "status": observation.status.value,
+                },
+            )
+        elif (
+            existing.kind != ArtifactKind.TOOL_RESULT
+            or existing.run_id != command.run_id
+            or existing.task_id != command.task_id
+            or existing.content_schema != "ResearchCommandObservation@1"
+        ):
+            raise RuntimeError(
+                "Existing research observation artifact violates its "
+                "idempotent command boundary."
+            )
         return observation.model_copy(
             update={
                 "output_artifact_ids": tuple(
@@ -525,6 +540,29 @@ class InformationGainEstimator:
         keys: list[str] = []
         if not isinstance(value, dict):
             return ()
+        ingestion = value.get("ingestion")
+        if isinstance(ingestion, dict):
+            entity_ids = ingestion.get("entity_ids", ())
+            if isinstance(entity_ids, (list, tuple)):
+                persisted = tuple(
+                    f"entity:{item}"
+                    for item in entity_ids
+                    if isinstance(item, str)
+                    and item.startswith(
+                        (
+                            "evidence_",
+                            "fact_",
+                            "claim_",
+                            "citation_",
+                            "conflict_",
+                        )
+                    )
+                )
+                # Once an ingestion boundary has reported its durable result,
+                # raw model arrays are not evidence of information gain. This
+                # prevents invalid or ungrounded candidate JSON from turning a
+                # budget-exhausted partial task into a completed task.
+                return tuple(dict.fromkeys(persisted))
         for field in (
             "facts",
             "atomic_facts",
@@ -566,7 +604,7 @@ class WorkerObservationVerifier:
         observation: Observation,
         prior_observations: tuple[Observation, ...],
     ) -> VerificationFeedback:
-        del spec, task, prior_observations
+        del spec, prior_observations
         if observation.status != ObservationStatus.SUCCEEDED:
             return VerificationFeedback(
                 passed=False,
@@ -585,20 +623,63 @@ class WorkerObservationVerifier:
             observation=observation,
         )
         self.assessments[command.command_id] = assessment
+        research = observation.normalized_data.get("_research", {})
+        duplicate = bool(
+            research.get("duplicate", False)
+            if isinstance(research, dict)
+            else False
+        )
+        source_discovery_complete = bool(
+            task.kind == TaskKind.SOURCE_DISCOVERY
+            and command.kind == CommandKind.SEARCH
+            and observation.normalized_data.get("sources")
+            and not duplicate
+        )
         semantic_complete = bool(
             observation.normalized_data.get("semantic_complete", False)
+            or source_discovery_complete
+        )
+        ingestion = observation.normalized_data.get("ingestion", {})
+        ingestion_issues = tuple(
+            str(item)
+            for item in (
+                ingestion.get("issues", ())
+                if isinstance(ingestion, dict)
+                else ()
+            )
+            if str(item)
+        )
+        repair_feedback = tuple(
+            dict.fromkeys(
+                (
+                    *(("Avoid this duplicate query or source.",) if assessment.duplicate else ()),
+                    *ingestion_issues,
+                    *(
+                        (
+                            "Repair the extract with verbatim quotes copied from "
+                            "persisted passages and ensure every claim has a "
+                            "persisted citation.",
+                        )
+                        if ingestion_issues
+                        else ()
+                    ),
+                )
+            )
         )
         return VerificationFeedback(
             passed=True,
             success=semantic_complete,
             semantic_complete=semantic_complete,
             information_gain=assessment.score,
-            summary=assessment.decision_summary,
-            repair_feedback=(
-                ("Avoid this duplicate query or source.",)
-                if assessment.duplicate
-                else ()
+            summary=(
+                assessment.decision_summary
+                if not ingestion_issues
+                else (
+                    f"{assessment.decision_summary} Ingestion rejected "
+                    f"{len(ingestion_issues)} ungrounded item(s)."
+                )
             ),
+            repair_feedback=repair_feedback,
         )
 
 
@@ -718,7 +799,52 @@ class ResearchWorkerRunner:
                 (*task_result.output_artifact_ids, result_artifact_id)
             )
         )
+        meaningful_partial = bool(
+            task_result.status == TaskResultStatus.PARTIAL
+            and information_gain > 0
+            and task_result.output_artifact_ids
+            and (
+                knowledge_keys
+                or (
+                    lease.task.kind == TaskKind.SOURCE_DISCOVERY
+                    and source_keys
+                )
+            )
+        )
         error = task_result.error
+        if (
+            task_result.status == TaskResultStatus.PARTIAL
+            and error is None
+            and not meaningful_partial
+        ):
+            error = ErrorRecord(
+                category=(
+                    ErrorCategory.BUDGET_EXHAUSTED
+                    if kernel_result.stop_decision.reason
+                    in {
+                        StopReason.BUDGET_EXHAUSTED,
+                        StopReason.DEADLINE_REACHED,
+                    }
+                    else ErrorCategory.VERIFICATION
+                ),
+                code=(
+                    "worker_partial_"
+                    f"{kernel_result.stop_decision.reason.value}"
+                ),
+                message=task_result.summary,
+                fatal=lease.task.attempt >= lease.task.max_attempts,
+                retryable=(
+                    lease.task.attempt < lease.task.max_attempts
+                    and kernel_result.stop_decision.reason
+                    in {
+                        StopReason.NO_ACTION_AVAILABLE,
+                        StopReason.BUDGET_EXHAUSTED,
+                        StopReason.LOW_INFORMATION_GAIN,
+                    }
+                ),
+                actor_id=self.agent_spec_id,
+                task_id=lease.task.task_id,
+            )
         if task_result.status in {
             TaskResultStatus.FAILED,
             TaskResultStatus.REJECTED,
@@ -732,6 +858,7 @@ class ResearchWorkerRunner:
             )
         retry_scheduled = bool(
             error is not None
+            and not meaningful_partial
             and error.retryable
             and lease.task.attempt < lease.task.max_attempts
         )
@@ -758,10 +885,10 @@ class ResearchWorkerRunner:
         # Persist the intent before crossing the scheduler store boundary. A
         # restart can reconcile this immutable attempt without rerunning tools.
         self.coordination.save_worker_result(result)
-        if task_result.status in {
-            TaskResultStatus.SUCCEEDED,
-            TaskResultStatus.PARTIAL,
-        }:
+        if (
+            task_result.status == TaskResultStatus.SUCCEEDED
+            or meaningful_partial
+        ):
             await self.scheduler.complete(
                 lease.task.task_id,
                 TaskCompletion(
@@ -893,7 +1020,10 @@ class ResearchWorkerResultReconciler:
                     "Worker result lease owner does not match scheduler state"
                 )
             try:
-                await self._apply_running(result)
+                await self._apply_running(
+                    result,
+                    task_kind=record.envelope.kind,
+                )
             except SchedulerLeaseError:
                 # The scheduler recovery pass will fence an expired attempt;
                 # its governed dedup keys make the subsequent attempt safe.
@@ -901,11 +1031,25 @@ class ResearchWorkerResultReconciler:
             reconciled.append(result.worker_result_id)
         return tuple(dict.fromkeys(reconciled))
 
-    async def _apply_running(self, result: ResearchWorkerResult) -> None:
-        if result.status in {
-            TaskResultStatus.SUCCEEDED,
-            TaskResultStatus.PARTIAL,
-        }:
+    async def _apply_running(
+        self,
+        result: ResearchWorkerResult,
+        *,
+        task_kind: TaskKind,
+    ) -> None:
+        meaningful_partial = bool(
+            result.status == TaskResultStatus.PARTIAL
+            and result.information_gain > 0
+            and result.output_artifact_ids
+            and (
+                result.knowledge_keys
+                or (
+                    task_kind == TaskKind.SOURCE_DISCOVERY
+                    and result.source_keys
+                )
+            )
+        )
+        if result.status == TaskResultStatus.SUCCEEDED or meaningful_partial:
             await self.scheduler.complete(
                 result.task_id,
                 TaskCompletion(

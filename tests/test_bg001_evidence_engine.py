@@ -552,6 +552,53 @@ async def test_exact_claim_verification_states_and_bounded_feedback(
 
 
 @pytest.mark.asyncio
+async def test_rejected_extra_evidence_does_not_poison_valid_support_path(
+    tmp_path,
+):
+    runtime = build_evidence_runtime(
+        tmp_path / "mixed-support",
+        semantic_adapter=DeterministicSemanticVerificationAdapter(),
+        event_sink=RecordingEvidenceEventSink(),
+        policy=_policy(),
+    )
+    try:
+        statement = "The verified method retrieves relevant records."
+        seeded = _seed_claim(
+            runtime,
+            run_id="run_mixed_support",
+            statement=statement,
+            relations_and_text=(
+                (EvidenceRelation.SUPPORTS, statement),
+                (
+                    EvidenceRelation.SUPPORTS,
+                    "This candidate passage discusses an unrelated topic.",
+                ),
+            ),
+        )
+        result = await runtime.engine.verify_claim(seeded.claim.claim_id)
+
+        assert result.status == ClaimStatus.SUPPORTED
+        assert result.verification_result.passed is True
+        assert result.verified_evidence_ids == (
+            seeded.evidence[0].evidence_id,
+        )
+        assert result.verified_citation_ids == (
+            seeded.citations[0].citation_id,
+        )
+        assert (
+            runtime.knowledge.repository.evidence.require(
+                seeded.evidence[1].evidence_id
+            ).status
+            == EvidenceStatus.REJECTED
+        )
+        assert "evidence_relation_not_semantically_grounded" in {
+            item.code for item in result.verification_result.issues
+        }
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_integrity_and_citation_failures_reject_candidates_and_stop_repairs_at_bound(
     tmp_path,
 ):
