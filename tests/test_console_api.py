@@ -469,6 +469,21 @@ async def test_console_workspace_exposes_cancelled_and_failed_boundaries(
             item.status == "failed"
             for item in failed.runtime.roles
         )
+        failed_roles = {
+            item.role_id: item.status for item in failed.runtime.roles
+        }
+        assert failed_roles["research_supervisor"] == "failed"
+        assert failed_roles["research_worker_pool"] == "waiting"
+        assert failed_roles["evidence_verifier"] == "completed"
+        assert failed_roles["synthesis_writer"] == "waiting"
+        assert failed_roles["report_reviewer"] == "waiting"
+        failed_progress = {
+            item.step_id: item.status for item in failed.runtime.progress
+        }
+        assert failed_progress["research"] == "failed"
+        assert failed_progress["verification"] == "completed"
+        assert failed_progress["synthesis"] == "waiting"
+        assert failed_progress["review"] == "waiting"
         assert failed.timeline[-1].event_type == "run_failed"
     finally:
         await failed_service.aclose()
