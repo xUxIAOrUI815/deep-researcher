@@ -30,6 +30,7 @@ from deep_researcher.evidence import (
     build_evidence_verifier_spec,
 )
 from deep_researcher.events import (
+    EventQuery,
     EventRecorder,
     RedactionPolicy,
     SQLiteEventStore,
@@ -83,7 +84,7 @@ from .models import (
     ApplicationRunStatus,
     ResearchCreateRequest,
 )
-from .store import SQLiteApplicationStore
+from .store import ApplicationStoreConflict, SQLiteApplicationStore
 
 
 def _stable_id(prefix: str, *parts: str) -> str:
@@ -399,14 +400,31 @@ class ApplicationRuntime:
                         )
                     },
                 )
+            terminal_research_error: ErrorRecord | None = None
             if research_outcome.action == ConvergenceAction.STOP_BUDGET:
-                error = ErrorRecord(
+                terminal_research_error = ErrorRecord(
                     category=ErrorCategory.BUDGET_EXHAUSTED,
                     code="research_budget_exhausted",
                     message="Research stopped because its governed budget was exhausted.",
                     fatal=True,
                 )
-                controller.fail(error=error, usage=research_outcome.usage)
+            elif research_outcome.action in {
+                ConvergenceAction.STOP_LOW_GAIN,
+                ConvergenceAction.STOP_MAX_CYCLES,
+            }:
+                terminal_research_error = self._research_incomplete_error(
+                    record.run_id,
+                    action=research_outcome.action,
+                    error_refs=research_outcome.error_refs,
+                )
+            if terminal_research_error is not None:
+                error = terminal_research_error
+                await self._cancel_scheduler(record.run_id, error.message)
+                controller.fail(
+                    error=error,
+                    usage=research_outcome.usage,
+                    evidence_failed=False,
+                )
                 return self.application_store.transition(
                     research_id,
                     status=ApplicationRunStatus.FAILED,
@@ -417,6 +435,9 @@ class ApplicationRuntime:
                         "research_action": research_outcome.action.value,
                         "research_decision_artifact_id": (
                             research_outcome.decision_artifact_id
+                        ),
+                        "research_error_refs": list(
+                            research_outcome.error_refs
                         ),
                     },
                 )
@@ -486,7 +507,11 @@ class ApplicationRuntime:
                     fatal=True,
                 )
                 await self._cancel_scheduler(record.run_id, report_outcome.summary)
-                controller.fail(error=error, usage=total_usage)
+                controller.fail(
+                    error=error,
+                    usage=total_usage,
+                    evidence_failed=False,
+                )
                 return self.application_store.transition(
                     research_id,
                     status=ApplicationRunStatus.FAILED,
@@ -641,12 +666,26 @@ class ApplicationRuntime:
             )
             controller.start(query=record.query, research_id=record.research_id)
             controller.cancel(reason=reason, usage=BudgetUsage())
-        return self.application_store.transition(
-            research_id,
-            status=ApplicationRunStatus.CANCELLED,
-            current_stage="cancelled",
-            metadata={"cancellation_reason": reason},
-        )
+        try:
+            return self.application_store.transition(
+                research_id,
+                status=ApplicationRunStatus.CANCELLED,
+                current_stage="cancelled",
+                metadata={"cancellation_reason": reason},
+            )
+        except ApplicationStoreConflict:
+            # Execution can reach a terminal state after the cancellation
+            # token is signalled but before this projection write.  Preserve
+            # that authoritative terminal result instead of turning the race
+            # into an HTTP 500.
+            latest = self._require_record(research_id)
+            if latest.status in {
+                ApplicationRunStatus.COMPLETED,
+                ApplicationRunStatus.FAILED,
+                ApplicationRunStatus.CANCELLED,
+            }:
+                return latest
+            raise
 
     def recoverable_runs(self) -> tuple[ApplicationRunRecord, ...]:
         return tuple(
@@ -795,38 +834,28 @@ class ApplicationRuntime:
         record: ApplicationRunRecord,
         section_ids: dict[str, str],
     ) -> TaskEnvelope:
-        tool_contracts = {
-            "research.search": {
-                "kind": "search",
-                "required_arguments": ["operation=search", "query"],
-            },
-            "research.read": {
-                "kind": "read",
-                "required_arguments": ["operation=read", "url or urls"],
-            },
-            "research.extract": {
-                "kind": "extract",
-                "required_arguments": [
-                    "operation=extract",
-                    "section_id",
-                    "claims",
-                    "atomic_facts",
-                    "evidence",
-                ],
-                "grounding_rule": (
-                    "Every evidence item must reference a persisted source and "
-                    "contain an exact quote from a prior read/search passage."
-                ),
-            },
-            "research.compare": {
-                "kind": "compare",
-                "required_arguments": ["operation=compare"],
-            },
-            "research.verify_source": {
-                "kind": "verify_source",
-                "required_arguments": ["operation=verify_source"],
-            },
+        definitions = {
+            item.name: item
+            for item in self.tool_runtime.registry.definitions()
+            if item.name in WORKER_TOOL_NAMES
         }
+        tool_contracts = {
+            name: {
+                "kind": definition.operations[0],
+                "operation": definition.operations[0],
+                "description": definition.description,
+                "input_schema": definition.input_schema,
+                "output_schema": definition.output_schema,
+                "tool_version": definition.version,
+            }
+            for name, definition in sorted(definitions.items())
+        }
+        extract_contract = tool_contracts.get("research.extract")
+        if extract_contract is not None:
+            extract_contract["grounding_rule"] = (
+                "Every evidence item must reference a persisted source and "
+                "contain an exact quote from a prior read/search passage."
+            )
         return TaskEnvelope(
             task_id=record.root_task_id,
             run_id=record.run_id,
@@ -852,7 +881,12 @@ class ApplicationRuntime:
             expected_output_schema="ResearchRunOutcome@1",
             budget=self.config.research_budget,
             priority=1.0,
-            max_attempts=3,
+            # The root is a durable Supervisor control task.  Every replan
+            # cycle leases it once and successful convergence needs one final
+            # lease to commit the completion artifact, so its lease capacity
+            # must cover the whole bounded research loop rather than use the
+            # ordinary worker retry default.
+            max_attempts=self._cycles_for_depth(record.depth) + 1,
             created_by="runtime_application",
             tags=("background001", "research-root", record.depth),
         )
@@ -924,6 +958,87 @@ class ApplicationRuntime:
                 str(exc) or type(exc).__name__
             )[:2000],
             retryable=bool(getattr(exc, "retryable", False)),
+            fatal=True,
+        )
+
+    def _research_incomplete_error(
+        self,
+        run_id: str,
+        *,
+        action: ConvergenceAction,
+        error_refs: tuple[str, ...] = (),
+    ) -> ErrorRecord:
+        """Promote the scheduler's terminal cause while retaining event history."""
+        candidates: list[ErrorRecord] = []
+        after = 0
+        while True:
+            page = self.event_store.list(
+                EventQuery(run_id=run_id, after_sequence=after, limit=1000)
+            )
+            for event in page.items:
+                candidate: Any = (
+                    event.payload.get("error")
+                    if isinstance(event.payload, dict)
+                    else None
+                )
+                if candidate is None:
+                    candidate = event.error
+                if (
+                    candidate is None
+                    and isinstance(event.payload, dict)
+                    and event.payload.get("kernel_event_type")
+                    == "command.schema_invalid"
+                ):
+                    raw_errors = event.payload.get("errors", ())
+                    if not isinstance(raw_errors, (list, tuple)):
+                        raw_errors = (raw_errors,)
+                    candidate = {
+                        "category": ErrorCategory.SCHEMA_VALIDATION.value,
+                        "code": "command_schema_invalid",
+                        "message": "; ".join(
+                            str(item) for item in raw_errors if str(item)
+                        )
+                        or "Worker command schema validation failed.",
+                        "retryable": False,
+                        "fatal": True,
+                        "actor_id": event.actor_id,
+                        "task_id": event.task_id,
+                    }
+                if candidate is None:
+                    continue
+                try:
+                    error = (
+                        candidate
+                        if isinstance(candidate, ErrorRecord)
+                        else ErrorRecord.model_validate(candidate, strict=False)
+                    )
+                except (TypeError, ValueError):
+                    continue
+                candidates.append(error)
+            if page.next_after_sequence is None:
+                break
+            after = page.next_after_sequence
+        authoritative_refs = set(error_refs)
+        selected = next(
+            (
+                item
+                for item in candidates
+                if item.error_id in authoritative_refs
+            ),
+            candidates[0] if candidates else None,
+        )
+        if selected is not None:
+            return selected.model_copy(
+                update={"retryable": False, "fatal": True}
+            )
+        return ErrorRecord(
+            category=ErrorCategory.VERIFICATION,
+            code=f"research_{action.value}",
+            message=(
+                "Research ended without satisfying mandatory task, coverage, "
+                "and verified-evidence gates: " + action.value
+            ),
+            retryable=False,
             fatal=True,
         )
 

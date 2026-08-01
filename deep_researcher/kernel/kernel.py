@@ -371,8 +371,14 @@ class AgentKernel:
                         spec,
                         task,
                         attempt=repair_attempt + 1,
-                        retryable=repair_attempt < self.config.max_schema_repairs,
-                        fatal=repair_attempt >= self.config.max_schema_repairs,
+                        retryable=(
+                            repair_attempt < self.config.max_schema_repairs
+                            or task.attempt < task.max_attempts
+                        ),
+                        fatal=(
+                            repair_attempt >= self.config.max_schema_repairs
+                            and task.attempt >= task.max_attempts
+                        ),
                     )
                     self._emit(
                         "command.schema_invalid",

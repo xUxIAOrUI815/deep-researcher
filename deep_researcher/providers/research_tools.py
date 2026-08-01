@@ -39,6 +39,60 @@ WORKER_TOOL_NAMES = (
     COMPARE_TOOL,
     VERIFY_SOURCE_TOOL,
 )
+# Provider payloads are persisted before they reach the model context.  These
+# limits therefore bound only the evidence excerpt carried through each model
+# turn; they do not discard the durable source/snapshot records.  A standard
+# four-worker cycle must leave enough context budget for the mandatory extract
+# turn instead of spending the entire run budget re-sending search prose.
+MAX_SEARCH_CONTENT_CHARS = 2_500
+MAX_SEARCH_TOTAL_CONTENT_CHARS = 12_000
+MAX_READ_CONTENT_CHARS = 10_000
+MAX_READ_TOTAL_CONTENT_CHARS = 30_000
+
+
+def _sanitize_text(value: str) -> str:
+    return "".join(
+        character
+        for character in value
+        if (
+            ord(character) >= 32
+            and ord(character) != 127
+        )
+        or character in "\r\n\t"
+    )
+
+
+def _sanitize_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            _sanitize_text(str(key)): _sanitize_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    return value
+
+
+def _bounded_contents(
+    values: list[str],
+    *,
+    per_item_limit: int,
+    total_limit: int,
+) -> tuple[list[str], int, int]:
+    populated = sum(bool(item) for item in values)
+    effective_limit = (
+        min(per_item_limit, max(1, total_limit // populated))
+        if populated
+        else per_item_limit
+    )
+    bounded = [item[:effective_limit] for item in values]
+    truncated = sum(
+        len(item) > len(bounded_item)
+        for item, bounded_item in zip(values, bounded, strict=True)
+    )
+    return bounded, truncated, effective_limit
 
 
 class _SearchAdapter:
@@ -51,7 +105,30 @@ class _SearchAdapter:
         context: ToolInvocationContext,
     ) -> ToolAdapterResult:
         result = await self.provider.execute(arguments, context)
-        items = list((result.data or {}).get("items", []))
+        provider_items = [
+            _sanitize_value(dict(item))
+            for item in (result.data or {}).get("items", [])
+            if isinstance(item, dict)
+        ]
+        items = [
+            {
+                key: value
+                for key, value in item.items()
+                if key != "raw_content"
+            }
+            for item in provider_items
+        ]
+        raw_content = [
+            str(item.get("raw_content") or item.get("snippet") or "")
+            for item in provider_items
+        ]
+        bounded_content, truncated_count, effective_limit = (
+            _bounded_contents(
+                raw_content,
+                per_item_limit=MAX_SEARCH_CONTENT_CHARS,
+                total_limit=MAX_SEARCH_TOTAL_CONTENT_CHARS,
+            )
+        )
         sources = [
             {
                 "source_id": f"source_result_{index}",
@@ -61,7 +138,7 @@ class _SearchAdapter:
                 "query": arguments["query"],
                 "source_type": "other",
             }
-            for index, item in enumerate(items)
+            for index, item in enumerate(provider_items)
             if item.get("url")
         ]
         passages = [
@@ -69,11 +146,11 @@ class _SearchAdapter:
                 "source_id": f"source_result_{index}",
                 "url": item.get("url", ""),
                 "title": item.get("title", ""),
-                "text": item.get("raw_content") or item.get("snippet") or "",
+                "text": bounded_content[index],
                 "query": arguments["query"],
                 "extraction_method": "search_provider",
             }
-            for index, item in enumerate(items)
+            for index, item in enumerate(provider_items)
             if item.get("url")
             and (item.get("raw_content") or item.get("snippet"))
         ]
@@ -81,11 +158,16 @@ class _SearchAdapter:
             {
                 "url": item.get("url", ""),
                 "title": item.get("title", ""),
-                "markdown": item.get("raw_content") or item.get("snippet") or "",
+                # The content is represented once in passages so the model
+                # context and gateway payload do not carry a duplicate copy.
+                # Knowledge ingestion falls back from snapshot markdown to
+                # the matching passage while retaining this fetch metadata.
+                "markdown": "",
                 "fetch_method": "search_provider",
                 "http_status": 200,
+                "content_available_in_passages": True,
             }
-            for item in items
+            for index, item in enumerate(provider_items)
             if item.get("url")
             and (item.get("raw_content") or item.get("snippet"))
         ]
@@ -99,7 +181,14 @@ class _SearchAdapter:
                 "semantic_complete": False,
             },
             usage=result.usage,
-            metadata=result.metadata,
+            metadata={
+                **result.metadata,
+                "content_limit_chars": effective_limit,
+                "total_content_limit_chars": (
+                    MAX_SEARCH_TOTAL_CONTENT_CHARS
+                ),
+                "truncated_result_count": truncated_count,
+            },
         )
 
     async def health(self) -> ToolHealthStatus:
@@ -123,20 +212,35 @@ class _ReadAdapter:
             source_context=arguments.get("source_context") or {},
             force_playwright=bool(arguments.get("force_playwright", False)),
         )
+        raw_content = [
+            _sanitize_text(document.markdown)
+            for document in documents
+        ]
+        bounded_content, truncated_count, effective_limit = (
+            _bounded_contents(
+                raw_content,
+                per_item_limit=MAX_READ_CONTENT_CHARS,
+                total_limit=MAX_READ_TOTAL_CONTENT_CHARS,
+            )
+        )
         sources: list[dict[str, Any]] = []
         passages: list[dict[str, Any]] = []
         snapshots: list[dict[str, Any]] = []
         for index, document in enumerate(documents):
-            payload = document.model_dump(mode="json")
+            payload = _sanitize_value(document.model_dump(mode="json"))
+            payload["markdown"] = ""
+            payload["content_available_in_passages"] = bool(
+                bounded_content[index]
+            )
             snapshots.append(payload)
-            if document.error or not document.markdown.strip():
+            if document.error or not bounded_content[index].strip():
                 continue
             source_id = f"source_read_{index}"
             sources.append(
                 {
                     "source_id": source_id,
-                    "url": document.url,
-                    "title": document.title,
+                    "url": _sanitize_text(document.url),
+                    "title": _sanitize_text(document.title),
                     "source_type": "other",
                     "extraction_method": document.fetch_method,
                 }
@@ -144,9 +248,9 @@ class _ReadAdapter:
             passages.append(
                 {
                     "source_id": source_id,
-                    "url": document.url,
-                    "title": document.title,
-                    "text": document.markdown,
+                    "url": _sanitize_text(document.url),
+                    "title": _sanitize_text(document.title),
+                    "text": bounded_content[index],
                     "extraction_method": document.fetch_method,
                 }
             )
@@ -159,6 +263,11 @@ class _ReadAdapter:
                 "semantic_complete": False,
             },
             usage=BudgetUsage(tool_calls=1),
+            metadata={
+                "content_limit_chars": effective_limit,
+                "total_content_limit_chars": MAX_READ_TOTAL_CONTENT_CHARS,
+                "truncated_result_count": truncated_count,
+            },
         )
 
     async def health(self) -> ToolHealthStatus:
@@ -224,6 +333,113 @@ def _read_input_schema() -> dict[str, Any]:
 
 
 def _structured_input_schema(operation: str) -> dict[str, Any]:
+    identifier = {"type": "string", "minLength": 1, "maxLength": 500}
+    bounded_text = {"type": "string", "minLength": 1, "maxLength": 8000}
+    score = {"type": "number", "minimum": 0.0, "maximum": 1.0}
+    evidence_item = {
+        "type": "object",
+        "properties": {
+            "id": identifier,
+            "evidence_id": identifier,
+            "source_id": identifier,
+            "source_url": {"type": "string", "format": "uri"},
+            "quote": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3000,
+            },
+            "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000,
+            },
+            "confidence": score,
+            "quality_score": score,
+        },
+        "required": ["quote"],
+        "anyOf": [
+            {"required": ["source_id"]},
+            {"required": ["source_url"]},
+        ],
+        "additionalProperties": False,
+    }
+    fact_item = {
+        "type": "object",
+        "properties": {
+            "id": identifier,
+            "fact_id": identifier,
+            "source_id": identifier,
+            "source_url": {"type": "string", "format": "uri"},
+            "text": bounded_text,
+            "statement": bounded_text,
+            "section_id": identifier,
+            "confidence": score,
+        },
+        "allOf": [
+            {"anyOf": [{"required": ["text"]}, {"required": ["statement"]}]},
+            {
+                "anyOf": [
+                    {"required": ["source_id"]},
+                    {"required": ["source_url"]},
+                ]
+            },
+        ],
+        "additionalProperties": False,
+    }
+    claim_item = {
+        "type": "object",
+        "properties": {
+            "id": identifier,
+            "claim_id": identifier,
+            "text": bounded_text,
+            "statement": bounded_text,
+            "fact_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": identifier,
+            },
+            "evidence_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": identifier,
+            },
+            "confidence": score,
+        },
+        "allOf": [
+            {"anyOf": [{"required": ["text"]}, {"required": ["statement"]}]},
+            {
+                "anyOf": [
+                    {"required": ["fact_ids"]},
+                    {"required": ["evidence_ids"]},
+                ]
+            },
+        ],
+        "additionalProperties": False,
+    }
+    conflict_item = {
+        "type": "object",
+        "properties": {
+            "id": identifier,
+            "conflict_id": identifier,
+            "claim_ids": {
+                "type": "array",
+                "minItems": 2,
+                "uniqueItems": True,
+                "items": identifier,
+            },
+            "fact_ids": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": identifier,
+            },
+            "summary": bounded_text,
+            "description": bounded_text,
+        },
+        "required": ["claim_ids"],
+        "additionalProperties": False,
+    }
     properties: dict[str, Any] = {
         "operation": {"const": operation},
         "section_id": {"type": "string"},
@@ -231,24 +447,46 @@ def _structured_input_schema(operation: str) -> dict[str, Any]:
         "sources": {"type": "array", "items": {"type": "object"}},
         "passages": {"type": "array", "items": {"type": "object"}},
         "scraped_data_cache": {"type": "array", "items": {"type": "object"}},
-        "evidence": {"type": "array", "items": {"type": "object"}},
-        "atomic_facts": {"type": "array", "items": {"type": "object"}},
-        "claims": {"type": "array", "items": {"type": "object"}},
-        "conflicts": {"type": "array", "items": {"type": "object"}},
+        "evidence": {"type": "array", "items": evidence_item},
+        "atomic_facts": {"type": "array", "items": fact_item},
+        "claims": {"type": "array", "items": claim_item},
+        "conflicts": {"type": "array", "items": conflict_item},
         "section_evidence_packs": {"type": "array", "items": {"type": "object"}},
         "items": {"type": "array"},
         "result": {},
         "summary": {"type": "string"},
+        "url": {"type": "string", "format": "uri"},
+        "source_url": {"type": "string", "format": "uri"},
+        "source_id": {"type": "string", "minLength": 1},
     }
     required = ["operation"]
     if operation == "extract":
-        required.append("claims")
-    return {
+        required.extend(
+            ["section_id", "evidence", "atomic_facts", "claims"]
+        )
+        properties["section_id"] = identifier
+        for name in ("evidence", "atomic_facts", "claims"):
+            properties[name]["minItems"] = 1
+            properties[name]["maxItems"] = 3
+    schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "required": required,
         "additionalProperties": False,
     }
+    if operation == "compare":
+        schema["properties"]["items"] = {
+            "type": "array",
+            "minItems": 2,
+        }
+        schema["required"] = ["operation", "items"]
+    elif operation == "verify_source":
+        schema["anyOf"] = [
+            {"required": ["url"]},
+            {"required": ["source_url"]},
+            {"required": ["source_id"]},
+        ]
+    return schema
 
 
 def _definition(
@@ -293,6 +531,11 @@ def build_worker_tool_registry(
     tavily: TavilySearchToolAdapter | None = None,
     exa: ExaSearchToolAdapter | None = None,
 ) -> ToolRegistry:
+    tavily_adapter = tavily or TavilySearchToolAdapter()
+    exa_adapter = exa or ExaSearchToolAdapter()
+    exa_configured = exa is not None or bool(
+        getattr(exa_adapter, "api_key", "")
+    )
     registry = ToolRegistry()
     registry.register(
         _definition(
@@ -302,10 +545,12 @@ def build_worker_tool_registry(
             input_schema=_search_input_schema(),
             permission="web:search",
             provider="tavily",
-            fallback_tools=(SEARCH_FALLBACK_TOOL,),
+            fallback_tools=(
+                (SEARCH_FALLBACK_TOOL,) if exa_configured else ()
+            ),
             cache_ttl_seconds=300.0,
         ),
-        _SearchAdapter(tavily or TavilySearchToolAdapter()),
+        _SearchAdapter(tavily_adapter),
         activate=True,
     )
     registry.register(
@@ -318,7 +563,7 @@ def build_worker_tool_registry(
             provider="exa",
             cache_ttl_seconds=300.0,
         ),
-        _SearchAdapter(exa or ExaSearchToolAdapter()),
+        _SearchAdapter(exa_adapter),
         activate=True,
     )
     registry.register(

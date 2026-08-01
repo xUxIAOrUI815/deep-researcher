@@ -57,6 +57,7 @@ from deep_researcher.kernel import (
     validate_middleware_pipeline,
 )
 from deep_researcher.events import EventQuery, EventRecorder, SQLiteEventStore
+from deep_researcher.research import build_research_worker_spec
 
 
 def _version(kind: ComponentKind, name: str) -> VersionRef:
@@ -344,6 +345,64 @@ async def test_schema_repair_is_bounded_budgeted_and_never_persists_raw_reasonin
 
 
 @pytest.mark.asyncio
+async def test_live_worker_repairs_deepseek_shape_then_executes_canonical_tool():
+    spec = build_research_worker_spec()
+    model = QueueModel(
+        [
+            ModelResponse(
+                structured={
+                    "commands": [
+                        {
+                            "arguments": {
+                                "operation": "search",
+                                "query": "RAG papers",
+                            }
+                        }
+                    ]
+                }
+            )
+        ],
+        repairs=[
+            ModelResponse(
+                structured={
+                    "commands": [
+                        {
+                            "kind": "search",
+                            "arguments": {
+                                "operation": "search",
+                                "query": "RAG papers",
+                            },
+                        }
+                    ]
+                }
+            )
+        ],
+    )
+    executor = QueueExecutor(
+        [RawObservation(status="succeeded", data={"items": []})]
+    )
+    verifier = QueueVerifier(
+        [
+            VerificationFeedback(
+                passed=True,
+                success=True,
+                information_gain=0.1,
+                summary="Canonical search executed.",
+            )
+        ]
+    )
+    kernel, _ = _kernel(spec, model, executor, verifier)
+    result = await kernel.run(
+        agent_spec_id=spec.agent_spec_id,
+        task=_live_worker_task(),
+    )
+    assert result.task_result.status == TaskResultStatus.SUCCEEDED
+    assert len(model.repair_requests) == 1
+    assert executor.commands[0].name == "research.search"
+    assert executor.commands[0].kind == CommandKind.SEARCH
+
+
+@pytest.mark.asyncio
 async def test_schema_repair_exhaustion_returns_structured_failure():
     spec = _spec()
     invalid = ModelResponse(content="not json")
@@ -396,6 +455,145 @@ def test_command_normalization_forces_identity_is_deterministic_and_redacts():
     assert first.arguments["api_key"] == "[REDACTED]"
     assert "chain_of_thought" not in first.metadata
     assert first.metadata["round"] == 2
+
+
+def _live_worker_task() -> TaskEnvelope:
+    return _task(
+        "live_worker_contract",
+        constraints={
+            "available_worker_tools": [
+                "research.search",
+                "research.read",
+            ],
+            "worker_tool_contracts": {
+                "research.search": {
+                    "kind": "search",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {"const": "search"},
+                            "query": {"type": "string", "minLength": 1},
+                        },
+                        "required": ["operation", "query"],
+                        "additionalProperties": False,
+                    },
+                },
+                "research.read": {
+                    "kind": "read",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {"const": "read"},
+                            "url": {"type": "string", "minLength": 1},
+                        },
+                        "required": ["operation", "url"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        },
+    )
+
+
+def test_live_worker_schema_is_strict_and_uses_canonical_tool_contracts():
+    spec = build_research_worker_spec(max_parallel_commands=5)
+    task = _live_worker_task()
+    request = ContextBuilder().build(
+        spec=spec,
+        task=task,
+        observations=(),
+        feedback=(),
+        budget=spec.default_budget,
+        usage=BudgetUsage(),
+    )
+    command_schema = request.command_schema["properties"]["commands"]
+    assert command_schema["minItems"] == 1
+    assert command_schema["maxItems"] == 5
+    variants = command_schema["items"]["oneOf"]
+    search = next(
+        item
+        for item in variants
+        if item["properties"]["name"].get("const") == "research.search"
+    )
+    assert search["required"] == ["kind", "name", "arguments"]
+    assert search["properties"]["kind"] == {"const": "search"}
+    assert search["properties"]["arguments"]["required"] == [
+        "operation",
+        "query",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_note"),
+    [
+        (
+            {
+                "name": "research.search",
+                "arguments": {"operation": "search", "query": "RAG"},
+            },
+            "kind inferred from canonical name",
+        ),
+        (
+            {
+                "kind": "search",
+                "arguments": {"operation": "search", "query": "RAG"},
+            },
+            "name inferred from command kind",
+        ),
+        (
+            {
+                "name": "search",
+                "arguments": {"operation": "search", "query": "RAG"},
+            },
+            "short command alias normalized to canonical name",
+        ),
+    ],
+)
+def test_live_worker_normalizes_deepseek_command_identity(
+    raw: dict[str, Any],
+    expected_note: str,
+):
+    command = normalize_commands(
+        ModelResponse(structured={"commands": [raw]}),
+        spec=build_research_worker_spec(),
+        task=_live_worker_task(),
+        round_no=1,
+    )[0]
+    assert command.kind == CommandKind.SEARCH
+    assert command.name == "research.search"
+    assert expected_note in command.metadata["identity_normalization"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {
+            "kind": "read",
+            "name": "research.search",
+            "arguments": {"operation": "search", "query": "RAG"},
+        },
+        {
+            "kind": "search",
+            "name": "unknown.search",
+            "arguments": {"operation": "search", "query": "RAG"},
+        },
+        {
+            "kind": "search",
+            "name": "research.search",
+            "arguments": {"query": "RAG"},
+        },
+    ],
+)
+def test_live_worker_rejects_conflicting_unknown_or_invalid_tools(
+    raw: dict[str, Any],
+):
+    with pytest.raises(Exception, match=r"commands\[0\]"):
+        normalize_commands(
+            ModelResponse(structured={"commands": [raw]}),
+            spec=build_research_worker_spec(),
+            task=_live_worker_task(),
+            round_no=1,
+        )
 
 
 @pytest.mark.parametrize("kind", list(CommandKind))
@@ -491,11 +689,54 @@ def test_context_builder_trims_old_observations_redacts_and_injects_versions():
 
     assert estimate_tokens(request.system) + sum(estimate_tokens(item) for item in request.messages) <= 900
     assert len(request.messages) < len(observations) + 1
+    assert all(item["role"] != "tool" for item in request.messages)
+    assert any(
+        isinstance(item["content"], dict)
+        and item["content"].get("message_type")
+        == "governed_tool_observation"
+        for item in request.messages
+    )
     assert request.model_version == "worker-model@1.0.0"
     assert request.prompt_version == "worker-prompt@1.0.0"
     assert "abc123" not in repr(request)
     assert "'token': 'private'" not in repr(request)
     assert "'token': '[REDACTED]'" in repr(request)
+
+
+def test_research_phase_requires_read_before_exact_quote_extraction():
+    now = utc_now()
+    search = Observation(
+        command_id="command_phase_search",
+        run_id="run_phase",
+        task_id="task_phase",
+        actor_id="agent_phase",
+        status=ObservationStatus.SUCCEEDED,
+        normalized_data={
+            "sources": [{"url": "https://arxiv.org/abs/2501.12345"}],
+            "passages": [{"text": "Search result snippet only."}],
+            "_tool": {"name": "research.search"},
+        },
+        started_at=now,
+        completed_at=now,
+    )
+    after_search = ContextBuilder._research_phase((search,))
+    assert after_search["phase"] == "source_read_required"
+    assert "research.read" in after_search["required_next_action"]
+
+    read = search.model_copy(
+        update={
+            "observation_id": "observation_phase_read",
+            "command_id": "command_phase_read",
+            "normalized_data": {
+                "sources": [{"url": "https://arxiv.org/abs/2501.12345"}],
+                "passages": [{"text": "Verbatim paper text."}],
+                "_tool": {"name": "research.read"},
+            },
+        }
+    )
+    after_read = ContextBuilder._research_phase((search, read))
+    assert after_read["phase"] == "extraction_required"
+    assert "research.extract" in after_read["required_next_action"]
 
 
 def test_policy_checks_kind_delegation_grants_arguments_limits_expiry_and_approval():

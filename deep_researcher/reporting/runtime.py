@@ -118,6 +118,7 @@ def build_reporting_runtime(
         model_adapter=SynthesisWriterModelAdapter(
             writer_model,
             artifact_store=artifacts,
+            proposal_validator=writer_executor.validate_proposal,
         ),
         action_executor=writer_executor,
         verifier=WriterRevisionVerifier(

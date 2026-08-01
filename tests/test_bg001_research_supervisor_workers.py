@@ -15,6 +15,7 @@ from deep_researcher.artifacts import ArtifactQuery, SQLiteArtifactStore
 from deep_researcher.contracts import (
     ArtifactKind,
     Budget,
+    BudgetDimension,
     BudgetUsage,
     Command,
     CommandKind,
@@ -69,6 +70,7 @@ from deep_researcher.research import (
     DedupDecisionKind,
     DedupKind,
     InformationGainEstimator,
+    InformationGainAssessment,
     ResearchCoordinationConflict,
     ResearchCoordinationCorruption,
     ResearchWorkerActionExecutor,
@@ -85,6 +87,7 @@ from deep_researcher.research import (
     build_research_supervisor_spec,
     build_research_worker_spec,
 )
+from deep_researcher.research.worker import WorkerObservationVerifier
 
 
 def _budget(**updates: Any) -> Budget:
@@ -573,6 +576,70 @@ async def test_supervisor_model_repairs_invalid_plans_and_rejects_early_stop() -
 
 
 @pytest.mark.asyncio
+async def test_supervisor_repairs_underfunded_extraction_task_budget() -> None:
+    def plan(max_model_calls: int, max_tokens: int) -> dict[str, Any]:
+        budget = _budget().model_dump(mode="json")
+        budget["max_model_calls"] = max_model_calls
+        budget["max_tokens"] = max_tokens
+        return {
+            "action": "decompose",
+            "tasks": [
+                {
+                    "proposal_key": "extract_primary",
+                    "kind": "research",
+                    "title": "Read and extract the paper original",
+                    "goal": "Read the persisted source and extract exact quotes.",
+                    "expected_output_schema": "ResearchWorkerResult@1",
+                    "budget": budget,
+                }
+            ],
+            "decision_summary": "Create citation-grounded knowledge.",
+        }
+
+    base = QueueModel(
+        [ModelResponse(structured=plan(2, 28_000))],
+        repairs=[ModelResponse(structured=plan(4, 64_000))],
+    )
+    adapter = SupervisorPlanningModelAdapter(base, max_plan_repairs=1)
+    request = ModelRequest(
+        run_id="run_budget_admission",
+        task_id="task_budget_admission_root",
+        actor_id="agent_spec_research_supervisor_1_0_0",
+        system="generic",
+        messages=(
+            {
+                "role": "user",
+                "content": {
+                    "constraints": {
+                        "supervisor_context": {
+                            "cycle": 0,
+                            "objective": "Ground a paper claim",
+                            "allow_stop": False,
+                            "max_tasks_per_plan": 6,
+                            "minimum_model_calls_per_extraction_task": 4,
+                            "minimum_tokens_per_extraction_task": 64_000,
+                        }
+                    }
+                },
+            },
+        ),
+        command_schema={},
+        model_version="model@1",
+        prompt_version="prompt@1",
+        max_output_tokens=2000,
+    )
+
+    response = await adapter.complete(request)
+    parsed = SupervisorPlan.model_validate(
+        response.structured["supervisor_plan"],
+        strict=False,
+    )
+    assert len(base.repair_calls) == 1
+    assert parsed.tasks[0].budget.max_model_calls == 4
+    assert parsed.tasks[0].budget.max_tokens == 64_000
+
+
+@pytest.mark.asyncio
 async def test_supervisor_plan_materializes_dependency_safe_dag_and_dedups(
     tmp_path: Path,
 ) -> None:
@@ -805,12 +872,28 @@ async def test_worker_boundary_deduplicates_queries_sources_and_information_gain
     )
     first = await executor.execute(first_command)
     second = await executor.execute(second_command)
+    replayed_first = await executor.execute(first_command)
     assert len(boundary.calls) == 1
     assert first.normalized_data["_research"]["duplicate"] is False
     assert second.normalized_data["_research"]["duplicate"] is True
     assert second.normalized_data["_research"]["query_keys"] == [
         "durable research"
     ]
+    assert replayed_first.normalized_data["_research"]["duplicate"] is True
+    assert all(
+        item != _stable_id(
+            "artifact",
+            first_command.command_id,
+            "observation",
+        )
+        for item in artifacts.get(
+            _stable_id(
+                "artifact",
+                first_command.command_id,
+                "observation",
+            )
+        ).source_artifact_ids
+    )
     assert all(artifacts.get(item) is not None for item in first.output_artifact_ids)
 
     estimator = InformationGainEstimator(coordination)
@@ -844,6 +927,68 @@ async def test_worker_boundary_deduplicates_queries_sources_and_information_gain
     coordination.close()
     artifacts.close()
     await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_source_discovery_completes_after_novel_governed_search(
+    tmp_path: Path,
+) -> None:
+    coordination = SQLiteResearchCoordinationStore(
+        tmp_path / "coordination.sqlite3"
+    )
+    verifier = WorkerObservationVerifier(
+        InformationGainEstimator(coordination)
+    )
+    task = _task("discovery_complete", kind=TaskKind.SOURCE_DISCOVERY)
+    command = _command(
+        "discovery_complete",
+        kind=CommandKind.SEARCH,
+        arguments={"query": "primary RAG paper"},
+    )
+    now = utc_now()
+    observation = Observation(
+        command_id=command.command_id,
+        run_id=command.run_id,
+        task_id=command.task_id,
+        actor_id=command.actor_id,
+        status=ObservationStatus.SUCCEEDED,
+        output_artifact_ids=("artifact_discovery_complete",),
+        normalized_data={
+            "sources": [
+                {
+                    "source_id": "source_result_0",
+                    "url": "https://arxiv.org/abs/2501.12345",
+                }
+            ],
+            "semantic_complete": False,
+            "_research": {
+                "duplicate": False,
+                "query_keys": ["primary rag paper"],
+                "source_keys": ["https://arxiv.org/abs/2501.12345"],
+                "meaningful_artifact_ids": ["artifact_discovery_complete"],
+            },
+        },
+        started_at=now,
+        completed_at=now,
+    )
+    try:
+        result = await verifier.verify(
+            spec=None,
+            task=task.model_copy(
+                update={
+                    "run_id": command.run_id,
+                    "task_id": command.task_id,
+                }
+            ),
+            command=command,
+            observation=observation,
+            prior_observations=(),
+        )
+        assert result.passed is True
+        assert result.semantic_complete is True
+        assert result.success is True
+    finally:
+        coordination.close()
 
 
 @pytest.mark.asyncio
@@ -1083,7 +1228,9 @@ async def test_dynamic_replanning_continues_until_semantic_section_gate_passes(
                         "title": "Initial research",
                         "goal": "Establish initial section evidence",
                         "expected_output_schema": "ResearchWorkerResult@1",
-                        "budget": _budget().model_dump(mode="json"),
+                        "budget": _budget(max_tokens=64_000).model_dump(
+                            mode="json"
+                        ),
                     }
                 ],
                 "decision_summary": "Run initial research.",
@@ -1099,7 +1246,9 @@ async def test_dynamic_replanning_continues_until_semantic_section_gate_passes(
                         "title": "Repair section gap",
                         "goal": "Acquire the missing independent section evidence",
                         "expected_output_schema": "ResearchWorkerResult@1",
-                        "budget": _budget().model_dump(mode="json"),
+                        "budget": _budget(max_tokens=64_000).model_dump(
+                            mode="json"
+                        ),
                     }
                 ],
                 "decision_summary": "Replan from the persisted coverage gap.",
@@ -1170,6 +1319,107 @@ async def test_dynamic_replanning_continues_until_semantic_section_gate_passes(
     runtime.close()
     artifacts.close()
     await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_completes_reportable_run_with_explicit_gaps(
+    tmp_path: Path,
+) -> None:
+    run_id = "run_reportable_gaps"
+    scheduler = _scheduler(tmp_path / "scheduler.sqlite3")
+    artifacts = SQLiteArtifactStore(tmp_path / "artifacts.sqlite3")
+    evidence = FakeEvidence(artifacts, complete_after=99)
+    evidence.knowledge.repository.claims = Collection(
+        [
+            type(
+                "SupportedClaim",
+                (),
+                {
+                    "claim_id": "claim_reportable_gaps",
+                    "status": type("Status", (), {"value": "supported"})(),
+                },
+            )()
+        ]
+    )
+    evidence.knowledge.repository.citations = Collection(
+        [
+            type(
+                "VerifiedCitation",
+                (),
+                {"claim_id": "claim_reportable_gaps"},
+            )()
+        ]
+    )
+    runtime = build_research_runtime(
+        tmp_path / "research",
+        scheduler=scheduler,
+        evidence=evidence,
+        supervisor_model=QueueModel(
+            [
+                ModelResponse(
+                    structured={
+                        "action": "decompose",
+                        "tasks": [
+                            {
+                                "proposal_key": "source",
+                                "kind": "source_discovery",
+                                "title": "Find one more source",
+                                "goal": "Search for one additional source.",
+                                "expected_output_schema": (
+                                    "ResearchWorkerResult@1"
+                                ),
+                                "budget": _budget().model_dump(mode="json"),
+                            }
+                        ],
+                        "decision_summary": "Run one bounded source search.",
+                    }
+                )
+            ]
+        ),
+        worker_model=QueueModel(
+            [
+                ModelResponse(
+                    structured={
+                        "summary": "Search one source.",
+                        "commands": [
+                            {
+                                "kind": "search",
+                                "name": "research.search",
+                                "arguments": {"query": "bounded source"},
+                            }
+                        ],
+                    }
+                )
+            ]
+        ),
+        command_executor=Boundary(),
+        event_sink=EventCollector(),
+        convergence_policy=_convergence_policy(
+            required_section_ids=("section_required",),
+            max_gap_replan_cycles=0,
+        ),
+        worker_ids=("worker_one",),
+        artifact_store=artifacts,
+    )
+    try:
+        outcome = await runtime.coordinator.run(
+            _task(
+                "reportable_gaps_root",
+                run_id=run_id,
+                kind=TaskKind.ROOT,
+            ),
+            max_concurrency=2,
+        )
+        assert outcome.action == ConvergenceAction.COMPLETE_WITH_GAPS
+        snapshot = await scheduler.snapshot(run_id)
+        assert snapshot.control.status == RunControlStatus.COMPLETED
+        assert snapshot.by_id[
+            "task_reportable_gaps_root"
+        ].envelope.status == TaskStatus.COMPLETED
+    finally:
+        runtime.close()
+        artifacts.close()
+        await scheduler.close()
 
 
 def _snapshot(
@@ -1270,6 +1520,31 @@ def test_convergence_gate_covers_low_gain_budget_cancel_and_pending_precedence(
     assert budget.action == ConvergenceAction.STOP_BUDGET
     assert budget.snapshot.budget_exhausted is True
 
+    admission_evaluator = ConvergenceEvaluator(
+        evidence=evidence,
+        artifact_store=artifacts,
+        coordination=coordination,
+        policy=_convergence_policy(
+            required_section_ids=("section_required",),
+            run_budget=_budget(
+                max_tokens=200_000,
+                max_model_calls=200,
+            ),
+            minimum_replan_token_reserve=72_000,
+        ),
+    )
+    admission = admission_evaluator.assess(
+        scheduler_snapshot=_snapshot(
+            "run_budget_admission",
+            root_usage=BudgetUsage(input_tokens=128_000),
+        ),
+        root_task_id="task_run_budget_admission_root",
+        cycle=0,
+        latest_information_gain=1.0,
+    )
+    assert admission.action == ConvergenceAction.STOP_BUDGET
+    assert admission.snapshot.budget_exhausted is True
+
     cancelled = evaluator.assess(
         scheduler_snapshot=_snapshot(
             "run_cancelled",
@@ -1319,6 +1594,47 @@ def test_convergence_gate_covers_low_gain_budget_cancel_and_pending_precedence(
         "claim_high_impact",
     )
     assert blocked.snapshot.severe_conflict_ids == ("conflict_severe",)
+
+    reportable_evidence = FakeEvidence(artifacts, complete_after=99)
+    reportable_evidence.knowledge.repository.claims = Collection(
+        [
+            type(
+                "SupportedClaim",
+                (),
+                {
+                    "claim_id": "claim_reportable",
+                    "status": type("Status", (), {"value": "supported"})(),
+                },
+            )()
+        ]
+    )
+    reportable_evidence.knowledge.repository.citations = Collection(
+        [
+            type(
+                "VerifiedCitation",
+                (),
+                {"claim_id": "claim_reportable"},
+            )()
+        ]
+    )
+    bounded_evaluator = ConvergenceEvaluator(
+        evidence=reportable_evidence,
+        artifact_store=artifacts,
+        coordination=coordination,
+        policy=_convergence_policy(
+            required_section_ids=("section_required",),
+            max_gap_replan_cycles=3,
+        ),
+    )
+    bounded = bounded_evaluator.assess(
+        scheduler_snapshot=_snapshot("run_bounded_gaps"),
+        root_task_id="task_run_bounded_gaps_root",
+        cycle=3,
+        latest_information_gain=1.0,
+    )
+    assert bounded.action == ConvergenceAction.COMPLETE_WITH_GAPS
+    assert bounded.snapshot.verified_claim_count == 1
+    assert bounded.snapshot.verified_citation_count == 1
     assert artifacts.get(first.decision_artifact_id) is not None
     coordination.integrity_check()
     artifacts.integrity_check()
@@ -1350,7 +1666,9 @@ async def test_worker_pool_honors_global_concurrency_and_executes_all_tasks(
                             "title": f"Parallel work {index}",
                             "goal": f"Research independent source {index}",
                             "expected_output_schema": "ResearchWorkerResult@1",
-                            "budget": _budget().model_dump(mode="json"),
+                            "budget": _budget(max_tokens=64_000).model_dump(
+                                mode="json"
+                            ),
                         }
                         for index in range(3)
                     ],
@@ -1385,7 +1703,9 @@ async def test_worker_pool_honors_global_concurrency_and_executes_all_tasks(
         worker_model=worker_model,
         command_executor=boundary,
         event_sink=EventCollector(),
-        convergence_policy=_convergence_policy(),
+        convergence_policy=_convergence_policy(
+            minimum_replan_token_reserve=0,
+        ),
         worker_ids=("worker_one", "worker_two", "worker_three"),
     )
     outcome = await runtime.coordinator.run(
@@ -1695,7 +2015,11 @@ def _kernel_result(
     reason = (
         StopReason.APPROVAL_REQUIRED
         if status == TaskResultStatus.DEFERRED
-        else StopReason.REPEATED_ERROR
+        else (
+            StopReason.NO_ACTION_AVAILABLE
+            if status == TaskResultStatus.PARTIAL
+            else StopReason.REPEATED_ERROR
+        )
     )
     return KernelRunResult(
         task_result=TaskResult(
@@ -1742,6 +2066,10 @@ async def test_worker_runner_schedules_retry_and_preserves_approval_state(
         "approval",
         assigned_actor_id="worker_approval",
     )
+    partial_task = _task(
+        "partial",
+        assigned_actor_id="worker_partial",
+    )
     await scheduler.submit(
         retry_task,
         actor_id="agent_supervisor",
@@ -1751,6 +2079,11 @@ async def test_worker_runner_schedules_retry_and_preserves_approval_state(
         approval_task,
         actor_id="agent_supervisor",
         mutation_id="mutation_submit_approval",
+    )
+    await scheduler.submit(
+        partial_task,
+        actor_id="agent_supervisor",
+        mutation_id="mutation_submit_partial",
     )
     retry_lease = (
         await scheduler.claim(
@@ -1816,7 +2149,145 @@ async def test_worker_runner_schedules_retry_and_preserves_approval_state(
     ).by_id[approval_task.task_id]
     assert approval_record.envelope.status == TaskStatus.WAITING_APPROVAL
     assert approval_record.approval is not None
-    assert len(coordination.worker_results("run_research")) == 2
+    partial_lease = (
+        await scheduler.claim(
+            "run_research",
+            worker_id="worker_partial",
+            limit=1,
+            lease_seconds=60,
+            mutation_id="mutation_claim_partial",
+        )
+    )[0]
+    partial_runner = ResearchWorkerRunner(
+        worker_id="worker_partial",
+        agent_spec_id="agent_spec_research_worker_1_0_0",
+        kernel=FakeKernel(
+            [
+                _kernel_result(
+                    partial_lease.task,
+                    status=TaskResultStatus.PARTIAL,
+                )
+            ]
+        ),
+        verifier=verifier,
+        scheduler=scheduler,
+        artifact_store=artifacts,
+        coordination=coordination,
+    )
+    partial_result = await partial_runner.run_lease(partial_lease)
+    assert partial_result.retry_scheduled is True
+    assert (
+        await scheduler.snapshot("run_research")
+    ).by_id[partial_task.task_id].envelope.status == TaskStatus.READY
+    assert len(coordination.worker_results("run_research")) == 3
+    coordination.close()
+    artifacts.close()
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_meaningful_budget_partial_completes_discovery_dependency(
+    tmp_path: Path,
+) -> None:
+    scheduler = _scheduler(tmp_path / "scheduler.sqlite3")
+    artifacts = SQLiteArtifactStore(tmp_path / "artifacts.sqlite3")
+    coordination = SQLiteResearchCoordinationStore(
+        tmp_path / "coordination.sqlite3"
+    )
+    await scheduler.create_run(
+        "run_meaningful_partial",
+        max_concurrency=1,
+        actor_id="agent_supervisor",
+        mutation_id="mutation_create_meaningful_partial",
+    )
+    task = _task(
+        "meaningful_partial",
+        run_id="run_meaningful_partial",
+        kind=TaskKind.SOURCE_DISCOVERY,
+        assigned_actor_id="worker_meaningful",
+    )
+    await scheduler.submit(
+        task,
+        actor_id="agent_supervisor",
+        mutation_id="mutation_submit_meaningful_partial",
+    )
+    lease = (
+        await scheduler.claim(
+            task.run_id,
+            worker_id="worker_meaningful",
+            limit=1,
+            lease_seconds=60,
+            mutation_id="mutation_claim_meaningful_partial",
+        )
+    )[0]
+    source_artifact = artifacts.put_json(
+        {"sources": [{"url": "https://example.org/source"}]},
+        kind=ArtifactKind.SEARCH_RESPONSE,
+        producer_id="agent_spec_research_worker_1_0_0",
+        run_id=task.run_id,
+        task_id=task.task_id,
+        content_schema="ResearchObservation@1",
+    )
+    command = Command(
+        command_id="command_meaningful_partial",
+        run_id=task.run_id,
+        task_id=task.task_id,
+        actor_id="agent_spec_research_worker_1_0_0",
+        kind=CommandKind.SEARCH,
+        name="research.search",
+        arguments={"operation": "search", "query": "bounded evidence"},
+        expected_output_schema="ResearchSearchResult@1",
+        idempotency_key="meaningful-partial-search",
+    )
+    verifier = EmptyVerifier()
+    verifier.assessments[command.command_id] = InformationGainAssessment(
+        task_id=task.task_id,
+        command_id=command.command_id,
+        score=0.6,
+        new_artifact_ids=(source_artifact.artifact_id,),
+        new_source_keys=("https://example.org/source",),
+        new_query_keys=("bounded evidence",),
+        decision_summary="A new governed source was persisted.",
+    )
+    kernel_result = KernelRunResult(
+        task_result=TaskResult(
+            result_id="result_meaningful_partial",
+            task_id=task.task_id,
+            run_id=task.run_id,
+            actor_id="agent_spec_research_worker_1_0_0",
+            status=TaskResultStatus.PARTIAL,
+            output_artifact_ids=(source_artifact.artifact_id,),
+            summary="Budget ended after useful source discovery.",
+            started_at=utc_now(),
+            completed_at=utc_now(),
+        ),
+        stop_decision=StopDecision(
+            should_stop=True,
+            reason=StopReason.BUDGET_EXHAUSTED,
+            summary="The bounded token budget was exhausted.",
+            exhausted_dimensions=(BudgetDimension.TOKENS,),
+        ),
+        effective_budget=task.budget,
+        commands=(command,),
+    )
+    runner = ResearchWorkerRunner(
+        worker_id="worker_meaningful",
+        agent_spec_id="agent_spec_research_worker_1_0_0",
+        kernel=FakeKernel([kernel_result]),
+        verifier=verifier,
+        scheduler=scheduler,
+        artifact_store=artifacts,
+        coordination=coordination,
+    )
+
+    result = await runner.run_lease(lease)
+
+    assert result.status == TaskResultStatus.PARTIAL
+    assert result.information_gain == pytest.approx(0.6)
+    assert result.retry_scheduled is False
+    record = (await scheduler.snapshot(task.run_id)).by_id[task.task_id]
+    assert record.envelope.status == TaskStatus.COMPLETED
+    assert source_artifact.artifact_id in record.output_artifact_ids
     coordination.close()
     artifacts.close()
     await scheduler.close()

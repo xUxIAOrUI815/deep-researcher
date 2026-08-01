@@ -278,6 +278,15 @@ def test_safety_scanner_blocks_size_depth_control_and_non_http_urls():
     assert not scanner.scan({"a": {"b": {"c": 1}}}, definition, phase="input").allowed
     assert not scanner.scan({"value": "bad\x00value"}, definition, phase="input").allowed
     assert not scanner.scan({"url": "file:///etc/passwd"}, definition, phase="input").allowed
+    assert not scanner.scan({"url": "dragin:paper"}, definition, phase="output").allowed
+    assert PatternSafetyScanner(max_depth=2).scan(
+        {
+            "title": "DRAGIN: Dynamic retrieval augmented generation",
+            "content": "RAG-TP: a paper; doi:10.1234/example",
+        },
+        definition,
+        phase="output",
+    ).allowed
     assert scanner.scan({"url": "https://example.com"}, definition, phase="input").allowed
 
 
@@ -336,6 +345,54 @@ async def test_circuit_breaker_opens_and_fallback_recovers(tmp_path):
     assert len(primary.calls) == 1
     assert len(fallback.calls) == 2
     assert second.fallback_chain == ("search.fallback@1.0.0",)
+
+
+@pytest.mark.asyncio
+async def test_all_fallback_failures_preserve_primary_cause_and_audit_chain(
+    tmp_path,
+):
+    primary_definition = _definition(
+        fallback_tools=("search.fallback",),
+        max_attempts=1,
+    )
+    fallback_definition = _definition(
+        name="search.fallback",
+        max_attempts=1,
+    )
+    primary = QueueAdapter([_failed("Tavily primary response was rejected.")])
+    fallback = QueueAdapter(
+        [_failed("Exa fallback is not configured.", retryable=False)]
+    )
+    gateway, registry, store = _gateway(
+        tmp_path,
+        primary_definition,
+        primary,
+    )
+    registry.register(fallback_definition, fallback)
+
+    result = await gateway.execute_tool(
+        _command(suffix="all_fallbacks_fail"),
+        _context(),
+    )
+
+    assert not result.success
+    assert result.tool_name == "search.primary"
+    assert result.error is not None
+    assert result.error.message == "Tavily primary response was rejected."
+    assert result.fallback_chain == ("search.fallback@1.0.0",)
+    assert result.usage.tool_calls == 2
+    assert result.usage.errors == 2
+    assert [
+        item["message"]
+        for item in result.metadata["candidate_errors"]
+    ] == [
+        "Tavily primary response was rejected.",
+        "Exa fallback is not configured.",
+    ]
+    audit = store.list_audit("command_all_fallbacks_fail")
+    assert [item["event_type"] for item in audit].count(
+        "tool.candidate_failed"
+    ) == 2
 
 
 @pytest.mark.asyncio

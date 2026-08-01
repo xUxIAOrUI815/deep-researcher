@@ -13,6 +13,7 @@ from deep_researcher.application import (
     ApplicationRuntime,
     ConsoleActionsView,
     ConsoleApprovalView,
+    ConsoleCausalErrorView,
     ConsoleCitationView,
     ConsoleConflictView,
     ConsoleCoverageView,
@@ -247,6 +248,15 @@ class ResearchConsoleService:
         )
         latest_decision = decisions[-1] if decisions else None
         timeline = tuple(self._timeline(record.run_id))
+        raw_error_refs = record.metadata.get("research_error_refs", ())
+        if not isinstance(raw_error_refs, (list, tuple)):
+            raw_error_refs = ()
+        causal_errors = self._causal_errors(
+            timeline,
+            primary_error_refs=tuple(str(item) for item in raw_error_refs),
+            primary_code=record.error_code,
+            primary_message=record.error_message,
+        )
         active = self._active_task(task_records)
         task_views = self._task_views(task_records)
         approval_views = tuple(
@@ -259,6 +269,7 @@ class ResearchConsoleService:
             record=record,
             active_task=active,
             timeline=timeline,
+            task_records=task_records,
             decision_summary=(
                 "; ".join(latest_decision.reasons)
                 if latest_decision is not None
@@ -328,8 +339,23 @@ class ResearchConsoleService:
                     if latest_decision is not None
                     else ()
                 ),
-                error_code=record.error_code,
-                error_message=record.error_message,
+                error_code=(
+                    record.error_code
+                    or (
+                        causal_errors[0].code
+                        if record.status.value == "failed" and causal_errors
+                        else None
+                    )
+                ),
+                error_message=(
+                    record.error_message
+                    or (
+                        causal_errors[0].message
+                        if record.status.value == "failed" and causal_errors
+                        else None
+                    )
+                ),
+                causal_errors=causal_errors,
                 progress=progress,
                 roles=roles,
             ),
@@ -624,6 +650,7 @@ class ResearchConsoleService:
         record: ApplicationRunRecord,
         active_task: Any | None,
         timeline: tuple[TimelineEventSummary, ...],
+        task_records: tuple[Any, ...],
         decision_summary: str,
     ) -> tuple[tuple[ConsoleRoleView, ...], str | None]:
         definitions = (
@@ -636,14 +663,25 @@ class ResearchConsoleService:
         events: dict[str, list[TimelineEventSummary]] = {
             role_id: [] for role_id, _ in definitions
         }
-        completed_spans: set[str] = set()
+        latest_terminal: dict[str, str] = {}
         for event in timeline:
             role_id = cls._role_id(event.actor_id)
             if role_id is None:
                 continue
             events[role_id].append(event)
             if event.event_type in {"span_completed", "span_failed"}:
-                completed_spans.add(role_id)
+                latest_terminal[role_id] = event.event_type
+
+        failed_task_roles = {
+            cls._task_role(task)
+            for task in task_records
+            if task.envelope.status == TaskStatus.FAILED
+        }
+        cancelled_task_roles = {
+            cls._task_role(task)
+            for task in task_records
+            if task.envelope.status == TaskStatus.CANCELLED
+        }
 
         status = record.status.value
         terminal = status in {"completed", "failed", "cancelled"}
@@ -694,7 +732,15 @@ class ResearchConsoleService:
         for role_id, label in definitions:
             role_events = events[role_id]
             last = role_events[-1] if role_events else None
-            if status == "completed":
+            terminal_event = latest_terminal.get(role_id)
+            if (
+                terminal_event == "span_failed"
+                or role_id in failed_task_roles
+            ):
+                role_status = "failed"
+            elif status == "cancelled" and role_id in cancelled_task_roles:
+                role_status = "cancelled"
+            elif status == "completed":
                 role_status = "completed"
             elif role_id == active_role_id:
                 role_status = (
@@ -707,7 +753,7 @@ class ResearchConsoleService:
             elif status == "cancelled" and role_id == last_role:
                 role_status = "cancelled"
             elif role_events and (
-                role_id in completed_spans
+                terminal_event == "span_completed"
                 or active_role_id is not None
                 or terminal
             ):
@@ -745,6 +791,106 @@ class ResearchConsoleService:
                 )
             )
         return tuple(views), active_role_id
+
+    @staticmethod
+    def _causal_errors(
+        timeline: tuple[TimelineEventSummary, ...],
+        *,
+        primary_error_refs: tuple[str, ...] = (),
+        primary_code: str | None = None,
+        primary_message: str | None = None,
+    ) -> tuple[ConsoleCausalErrorView, ...]:
+        values: list[ConsoleCausalErrorView] = []
+        seen: set[tuple[str, str, str | None]] = set()
+        for event in sorted(timeline, key=lambda item: item.sequence_no):
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            candidate = payload.get("error")
+            if not isinstance(candidate, dict):
+                candidate = event.error if isinstance(event.error, dict) else None
+            kernel_type = str(payload.get("kernel_event_type") or "")
+            if candidate is None and kernel_type == "command.schema_invalid":
+                raw_errors = payload.get("errors", ())
+                if isinstance(raw_errors, dict):
+                    raw_errors = raw_errors.get("value", ())
+                if not isinstance(raw_errors, (list, tuple)):
+                    raw_errors = (raw_errors,)
+                candidate = {
+                    "category": "schema_validation",
+                    "code": "command_schema_invalid",
+                    "message": "; ".join(
+                        str(item) for item in raw_errors if str(item)
+                    )
+                    or "Worker command schema validation failed.",
+                    "retryable": True,
+                    "fatal": False,
+                    "task_id": event.task_id,
+                }
+            if candidate is None:
+                continue
+            code = str(candidate.get("code") or "runtime_error")
+            message = str(candidate.get("message") or "Runtime error.")
+            task_id = candidate.get("task_id") or event.task_id
+            fingerprint = (code, message, task_id)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            values.append(
+                ConsoleCausalErrorView(
+                    sequence_no=event.sequence_no,
+                    error_id=(
+                        str(candidate.get("error_id"))
+                        if candidate.get("error_id")
+                        else None
+                    ),
+                    event_type=event.event_type,
+                    actor_id=str(
+                        candidate.get("actor_id") or event.actor_id or ""
+                    ),
+                    task_id=str(task_id) if task_id is not None else None,
+                    category=str(candidate.get("category") or "internal"),
+                    code=code,
+                    message=message,
+                    retryable=bool(candidate.get("retryable", False)),
+                    fatal=bool(candidate.get("fatal", False)),
+                    is_primary=False,
+                )
+            )
+        if not values:
+            return ()
+        authoritative_refs = set(primary_error_refs)
+        primary_index = next(
+            (
+                index
+                for index, item in enumerate(values)
+                if item.error_id in authoritative_refs
+            ),
+            None,
+        )
+        if primary_index is None and primary_code and primary_message:
+            primary_index = next(
+                (
+                    index
+                    for index, item in enumerate(values)
+                    if item.code == primary_code
+                    and item.message == primary_message
+                ),
+                None,
+            )
+        if primary_index is None and primary_code:
+            primary_index = next(
+                (
+                    index
+                    for index, item in enumerate(values)
+                    if item.code == primary_code
+                ),
+                None,
+            )
+        if primary_index is None:
+            primary_index = 0
+        primary = values.pop(primary_index).model_copy(
+            update={"is_primary": True}
+        )
+        return (primary, *values)
 
     @staticmethod
     def _progress_steps(

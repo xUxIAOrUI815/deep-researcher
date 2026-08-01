@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+import json
 
 import httpx
 import pytest
@@ -16,9 +18,11 @@ from deep_researcher.providers import (
     MockScraper,
     SEARCH_TOOL,
     TavilySearchToolAdapter,
+    SmartScraper,
     build_governed_research_tools,
 )
 from deep_researcher.providers.research_tools import (
+    EXTRACT_TOOL,
     READ_TOOL,
     SEARCH_FALLBACK_TOOL,
 )
@@ -46,6 +50,27 @@ def _command(
         expected_output_schema="Observation@1",
         idempotency_key=f"provider-{suffix}",
     )
+
+
+@pytest.mark.asyncio
+async def test_live_scraper_failure_uses_explicit_capture_metadata(
+    monkeypatch,
+):
+    scraper = SmartScraper()
+
+    async def fail_scrape(url: str, force_playwright: bool = False):
+        del url, force_playwright
+        raise RuntimeError("bounded scrape failure")
+
+    monkeypatch.setattr(scraper, "scrape", fail_scrape)
+    documents = await scraper.scrape_batch(["https://example.org/paper"])
+
+    assert len(documents) == 1
+    assert documents[0].error == "bounded scrape failure"
+    captured_at = datetime.fromisoformat(
+        str(documents[0].metadata["captured_at"])
+    )
+    assert captured_at.tzinfo is not None
 
 
 @pytest.mark.asyncio
@@ -112,6 +137,151 @@ async def test_tavily_adapter_uses_bearer_auth_and_normalizes_response():
 
 
 @pytest.mark.asyncio
+async def test_large_tavily_results_are_bounded_before_gateway_safety_scan(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "url": f"https://example.org/paper-{index}",
+                        "title": f"DRAGIN:\f Paper {index}",
+                        "content": "RAG-TP: Relevant paper; doi:10.1234/example.",
+                        "raw_content": "\f" + "x" * 120_000,
+                        "score": 0.9,
+                    }
+                    for index in range(10)
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as client:
+        tools = build_governed_research_tools(
+            tmp_path,
+            tavily=TavilySearchToolAdapter(
+                api_key="tvly-test-key",
+                http_client=client,
+            ),
+            retry_base_seconds=0,
+        )
+        try:
+            result = await tools.gateway.execute(
+                _command(
+                    "large-search",
+                    name=SEARCH_TOOL,
+                    kind=CommandKind.SEARCH,
+                    arguments={
+                        "operation": "search",
+                        "query": "large papers",
+                        "max_results": 10,
+                    },
+                )
+            )
+            definition = tools.registry.resolve(SEARCH_TOOL)[0]
+        finally:
+            tools.close()
+
+    assert result.status.value == "succeeded"
+    assert len(json.dumps(result.normalized_data).encode()) < 1_000_000
+    assert all(
+        "raw_content" not in item
+        for item in result.normalized_data["items"]
+    )
+    assert all(
+        len(item["text"]) <= 8_000
+        for item in result.normalized_data["passages"]
+    )
+    assert sum(
+        len(item["text"])
+        for item in result.normalized_data["passages"]
+    ) <= 40_000
+    assert all(
+        not item["markdown"]
+        for item in result.normalized_data["scraped_data_cache"]
+    )
+    assert "\f" not in repr(result.normalized_data)
+    assert definition.fallback_tools == ()
+
+
+@pytest.mark.asyncio
+async def test_extract_schema_rejects_empty_facts_before_domain_ingestion(
+    tmp_path: Path,
+):
+    tools = build_governed_research_tools(
+        tmp_path,
+        scraper=MockScraper(),
+        retry_base_seconds=0,
+    )
+    base = {
+        "operation": "extract",
+        "section_id": "section_findings",
+        "evidence": [
+            {
+                "id": "evidence_one",
+                "source_id": "source_result_0",
+                "quote": "Exact persisted quote.",
+            }
+        ],
+        "atomic_facts": [
+            {
+                "id": "fact_one",
+                "source_id": "source_result_0",
+                "statement": "A grounded fact.",
+            }
+        ],
+        "claims": [
+            {
+                "id": "claim_one",
+                "statement": "A grounded claim.",
+                "fact_ids": ["fact_one"],
+            }
+        ],
+        "conflicts": [],
+    }
+    try:
+        invalid = await tools.gateway.execute(
+            _command(
+                "invalid-extract",
+                name=EXTRACT_TOOL,
+                kind=CommandKind.EXTRACT,
+                arguments={
+                    **base,
+                    "atomic_facts": [
+                        {
+                            "id": "fact_one",
+                            "source_id": "source_result_0",
+                            "statement": "",
+                        }
+                    ],
+                },
+            )
+        )
+        valid = await tools.gateway.execute(
+            _command(
+                "valid-extract",
+                name=EXTRACT_TOOL,
+                kind=CommandKind.EXTRACT,
+                arguments=base,
+            )
+        )
+    finally:
+        tools.close()
+
+    assert invalid.status.value == "failed"
+    assert invalid.error is not None
+    assert invalid.error.category.value == "schema_validation"
+    assert valid.status.value == "succeeded"
+
+
+@pytest.mark.asyncio
 async def test_exa_adapter_uses_key_header_and_normalizes_response():
     calls: list[httpx.Request] = []
 
@@ -171,7 +341,7 @@ async def test_production_registry_governs_search_fallback_and_scraping(
     fixtures = {
         "https://example.org/page": {
             "title": "Fixture page",
-            "markdown": "# Fixture\n\nA complete fixture body.",
+            "markdown": "# Fixture\n\nA complete\f fixture body.",
         }
     }
     async with httpx.AsyncClient(
@@ -230,6 +400,7 @@ async def test_production_registry_governs_search_fallback_and_scraping(
     assert read.normalized_data["scraped_data_cache"][0]["title"] == (
         "Fixture page"
     )
+    assert "\f" not in read.normalized_data["passages"][0]["text"]
     assert definitions[SEARCH_TOOL].fallback_tools == (
         SEARCH_FALLBACK_TOOL,
     )

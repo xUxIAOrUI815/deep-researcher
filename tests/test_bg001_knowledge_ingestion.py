@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from deep_researcher.artifacts import ArtifactQuery
 from deep_researcher.contracts import ArtifactKind
 from deep_researcher.knowledge import build_knowledge_runtime
@@ -174,5 +176,145 @@ def test_identical_candidate_identifiers_are_namespaced_per_run(tmp_path):
             item.claim_id for item in beta
         )
         runtime.integrity_check()
+    finally:
+        runtime.close()
+
+
+def test_source_authority_uses_canonical_identity_and_survives_read_replay(
+    tmp_path,
+):
+    runtime = build_knowledge_runtime(tmp_path / "runtime")
+    observation = deepcopy(RESEARCH)
+    observation["sources"][0].update(
+        {
+            "url": "https://arxiv.org/abs/2501.12345",
+            "source_type": "other",
+            "score": 0.01,
+        }
+    )
+    observation["passages"][0]["url"] = observation["sources"][0]["url"]
+    observation["scraped_data_cache"][0]["url"] = observation["sources"][0][
+        "url"
+    ]
+    try:
+        first = runtime.ingestion.ingest_research_observation(
+            observation,
+            run_id="run_authority",
+            task_id="task_search",
+        )
+        replay = deepcopy(observation)
+        replay["sources"][0].update(
+            {
+                "title": "Read copy of the paper original",
+                "score": None,
+            }
+        )
+        second = runtime.ingestion.ingest_research_observation(
+            replay,
+            run_id="run_authority",
+            task_id="task_read",
+        )
+        source = runtime.repository.find_source_by_url(
+            "run_authority",
+            observation["sources"][0]["url"],
+        )
+        assert source is not None
+        assert source.source_type.value == "primary"
+        assert source.source_level.value == "primary"
+        assert source.authority_score == 0.9
+        assert source.metadata["search_relevance_score"] is None
+        assert set(source.provenance.source_artifact_ids) == {
+            first.artifact_ids[0],
+            second.artifact_ids[0],
+        }
+    finally:
+        runtime.close()
+
+
+def test_ungrounded_candidate_quote_cannot_create_claim_or_citation(tmp_path):
+    runtime = build_knowledge_runtime(tmp_path / "runtime")
+    invalid = deepcopy(CANDIDATES)
+    invalid["evidence"][0]["quote"] = "The benchmark was approximately forty-two."
+    try:
+        runtime.ingestion.ingest_research_observation(
+            RESEARCH,
+            run_id="run_ungrounded",
+            task_id="task_ungrounded",
+        )
+        result = runtime.ingestion.ingest_candidate_knowledge(
+            invalid,
+            run_id="run_ungrounded",
+            task_id="task_ungrounded",
+        )
+        assert any("not an exact substring" in item for item in result.issues)
+        assert runtime.repository.evidence.list("run_ungrounded") == ()
+        assert runtime.repository.facts.list("run_ungrounded") == ()
+        assert runtime.repository.claims.list("run_ungrounded") == ()
+        assert runtime.repository.citations.list("run_ungrounded") == ()
+    finally:
+        runtime.close()
+
+
+def test_candidate_quote_resolves_read_passage_before_search_snippet(tmp_path):
+    runtime = build_knowledge_runtime(tmp_path / "runtime")
+    search = deepcopy(RESEARCH)
+    search["passages"][0]["text"] = "Search snippet without the paper quote."
+    search["scraped_data_cache"][0]["markdown"] = ""
+    read = deepcopy(RESEARCH)
+    read["sources"][0]["source_id"] = "source_read_0"
+    read["passages"][0].update(
+        {
+            "source_id": "source_read_0",
+            "text": "The paper reports a verified benchmark of 42.",
+            "extraction_method": "jina",
+        }
+    )
+    read["scraped_data_cache"][0].update(
+        {
+            "markdown": "The paper reports a verified benchmark of 42.",
+            "fetch_method": "jina",
+        }
+    )
+    candidates = deepcopy(CANDIDATES)
+    candidates["evidence"][0].update(
+        {
+            "source_id": "source_one",
+            "source_url": RESEARCH["sources"][0]["url"],
+            "quote": "The paper reports a verified benchmark of 42.",
+        }
+    )
+    candidates["atomic_facts"][0].update(
+        {
+            "source_id": "source_one",
+            "source_url": RESEARCH["sources"][0]["url"],
+            "text": "The paper reports a verified benchmark of 42.",
+        }
+    )
+    candidates["claims"][0]["text"] = (
+        "The paper reports a verified benchmark of 42."
+    )
+    try:
+        runtime.ingestion.ingest_research_observation(
+            search,
+            run_id="run_read_precedence",
+            task_id="task_search",
+        )
+        runtime.ingestion.ingest_research_observation(
+            read,
+            run_id="run_read_precedence",
+            task_id="task_read",
+        )
+        result = runtime.ingestion.ingest_candidate_knowledge(
+            candidates,
+            run_id="run_read_precedence",
+            task_id="task_extract",
+        )
+        assert result.issues == ()
+        citation = runtime.repository.citations.list("run_read_precedence")[0]
+        passage = runtime.repository.passages.require(citation.passage_id)
+        assert passage.extraction_method == "jina"
+        assert runtime.artifacts.read_bytes(passage.text_artifact_id).decode(
+            "utf-8"
+        ) == "The paper reports a verified benchmark of 42."
     finally:
         runtime.close()

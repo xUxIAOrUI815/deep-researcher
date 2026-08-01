@@ -12,7 +12,14 @@ from deep_researcher.application import (
     application_component_versions,
 )
 from deep_researcher.artifacts import SQLiteArtifactStore
-from deep_researcher.contracts import ArtifactKind, BudgetUsage, EventType
+from deep_researcher.contracts import (
+    ArtifactKind,
+    BudgetUsage,
+    EventType,
+    RunEvent,
+    RunStatus,
+    SpanKind,
+)
 from deep_researcher.events import (
     EventQuery,
     EventRecorder,
@@ -162,6 +169,84 @@ def test_long_trace_paginates_and_redacts_without_losing_terminal_event(
         store.integrity_check()
     finally:
         store.close()
+
+
+def test_resumed_controller_closes_detached_child_spans_before_cancel(
+    tmp_path: Path,
+):
+    store = SQLiteEventStore(tmp_path / "detached-spans.sqlite3")
+    recorder = EventRecorder(store)
+    controller = ApplicationRunEventController(
+        recorder,
+        run_id="run_detached_spans",
+        thread_id="thread_detached_spans",
+        trace_id="trace_detached_spans",
+        correlation_id="correlation_detached_spans",
+        component_versions=application_component_versions(),
+    )
+    controller.start(
+        query="Recover stale spans.",
+        research_id="research_detached_spans",
+    )
+    root = store.get_run("run_detached_spans").root_span_id
+    versions = application_component_versions()
+    for sequence, event_type, span_id, parent, kind in (
+        (2, EventType.SPAN_STARTED, "span_detached_agent", root, SpanKind.AGENT),
+        (
+            3,
+            EventType.MODEL_STARTED,
+            "span_detached_model",
+            "span_detached_agent",
+            SpanKind.MODEL,
+        ),
+    ):
+        store.append(
+            RunEvent(
+                sequence_no=sequence,
+                event_type=event_type,
+                status=RunStatus.RUNNING,
+                trace_id="trace_detached_spans",
+                span_id=span_id,
+                parent_span_id=parent,
+                span_kind=kind,
+                correlation_id="correlation_detached_spans",
+                run_id="run_detached_spans",
+                thread_id="thread_detached_spans",
+                task_id="task_detached_spans",
+                actor_id="agent_detached",
+                producer_id="test_detached",
+                component_versions=versions,
+            )
+        )
+
+    resumed = ApplicationRunEventController(
+        recorder,
+        run_id="run_detached_spans",
+        thread_id="thread_detached_spans",
+        trace_id="trace_detached_spans",
+        correlation_id="correlation_detached_spans",
+        component_versions=versions,
+        attempt=2,
+    )
+    resumed.start(
+        query="Recover stale spans.",
+        research_id="research_detached_spans",
+    )
+    resumed.cancel(reason="Superseded acceptance run.", usage=BudgetUsage())
+
+    events = store.list(
+        EventQuery("run_detached_spans", limit=100)
+    ).items
+    assert [item.event_type for item in events[-3:]] == [
+        EventType.SPAN_FAILED,
+        EventType.SPAN_FAILED,
+        EventType.RUN_CANCELLED,
+    ]
+    assert [
+        item.span_id for item in events[-3:-1]
+    ] == ["span_detached_model", "span_detached_agent"]
+    store.integrity_check()
+    store.close()
 
 
 def test_production_source_tree_has_no_superseded_runtime_imports():

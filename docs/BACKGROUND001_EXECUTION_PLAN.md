@@ -112,7 +112,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
   |-- 11 + 12 -- 13 Studio V3/V4
   |-- 11 + 13 -- 14 Offline Evolution
   |-- all branches -- 15 Integration/Hardening
-  `-- 15 -- 16 Console Runtime Alignment
+  `-- 15 -- 16 Console Runtime Alignment -- 17 Live Runtime Contract Recovery
 ```
 
 ## Branch status
@@ -136,6 +136,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 14 | `codex/bg001-14-offline-evolution` | integrated | 80dbde8 | Reviewed trace/badcase/evaluation pool, bounded structured patches, strict gated selection, rejected-edit memory, human release, best_skill and rollback complete. |
 | 15 | `codex/bg001-15-integration-hardening` | integrated | c241efc | Production composition, draft removal, native-scheduler ADR, full recovery/security/stress gates, and capability-boundary documentation complete. |
 | 16 | `codex/bg001-16-console-runtime-alignment` | integrated | 1d9c3f4 | Complete root Console projection, operational workspace, report lifecycle, actions, accessibility, and browser/API contract alignment. |
+| 17 | `codex/bg001-17-live-runtime-contract-recovery` | completed locally | pending merge | Strict live Worker contracts, governed phase protocol, grounded ingestion, bounded recovery/convergence, verified-only reporting repair, causal errors, and Console role/stage projection complete. |
 
 ## 00 - Foundation contracts and baseline
 
@@ -617,6 +618,63 @@ Merge gate:
   evidence, coverage, report, timeline and Studio links resolve to the exact
   run; payloads are escaped and Markdown is allowlisted; desktop/tablet/mobile
   browser checks and the full normal/reverse test suites pass.
+
+## 17 - Live runtime contract recovery
+
+Branch: `codex/bg001-17-live-runtime-contract-recovery`
+
+Complete deliverables:
+
+- Make every Research Worker model request expose a strict command schema
+  derived from its AgentSpec and governed tool contracts, including allowed
+  command kinds, canonical tool names, argument objects, and command-specific
+  required fields.
+- Normalize only unambiguous, allowlisted model omissions: infer a canonical
+  tool name from a permitted command kind and infer a command kind from a
+  canonical permitted tool name. Reject ambiguous, unknown, or conflicting
+  command identities with structured repair feedback.
+- Use the same strict contract for initial generation and bounded schema repair,
+  and preserve the first causal validation/tool error in task and run outcomes.
+- Route schema exhaustion, partial Worker outcomes, retryable tool failures and
+  budget-limited attempts through the scheduler's bounded retry/replan policy
+  instead of allowing empty convergence cycles.
+- Gate the research-to-report transition on scheduler work state, required
+  section coverage, verified evidence readiness, blockers and convergence
+  semantics. Represent maximum-cycle and no-evidence outcomes explicitly as
+  incomplete or failed rather than successful research.
+- Build Writer gap disclosures from exact persisted Writer-packet gap identities;
+  permit honest incomplete reports only through that contract; route reparable
+  Writer domain-validation failures through bounded repair and persist their
+  revisions/outcomes.
+- Project the complete causal error chain and derive Console stages and five-role
+  statuses from authoritative scheduler, trace, evidence and report lifecycle
+  state, including Worker and Writer failures.
+- Add regression coverage for live DeepSeek-shaped command responses, canonical
+  tool resolution, bounded recovery, convergence/report gates, empty evidence,
+  exact gaps, report repair, causal errors and Console stage projection; finish
+  with a real configured DeepSeek/Tavily run of the reproduced research query.
+
+Boundary:
+
+- No new role, tool, provider, protocol, evidence state, reviewer rubric,
+  scheduler transition type, evaluation/evolution capability, compatibility
+  facade, deployment, main merge, release, online self-modification, or RL work.
+- Do not weaken Writer verified-only or exact-gap invariants. Do not synthesize
+  fabricated evidence or treat provider HTTP success as semantic task success.
+
+Merge gate:
+
+- DeepSeek-shaped malformed and partially specified command responses are
+  either normalized to an allowlisted canonical command or repaired/rejected
+  deterministically; an unknown short tool name cannot reach the gateway.
+- Retryable Worker failures consume bounded attempts and either recover or
+  terminate with their earliest cause; convergence cannot spin through empty
+  cycles or mark research complete with unresolved mandatory work.
+- Reporting receives a verified packet or an explicit exact-gap incomplete
+  packet, and Writer validation failures receive bounded repair feedback.
+- The Console shows authoritative role/stage failure and the complete causal
+  chain. Focused, full normal/reverse, restart/failure-path, and real live-run
+  browser verification pass.
 
 ## Execution records
 
@@ -1471,4 +1529,53 @@ Remaining risks: Live research still requires configured model and search
   provider credentials; the Console reports that boundary instead of
   fabricating results. The two suite warnings are upstream websocket API
   deprecations and do not affect current MCP behavior.
+```
+
+### Branch 17 execution record
+
+```text
+Branch: codex/bg001-17-live-runtime-contract-recovery
+Started from integration commit: 8548453
+Scope delivered: Strict AgentSpec/tool-derived Worker command schemas and
+  canonical identity normalization; bounded malformed-JSON and structured
+  output repair; provider-valid typed observations; governed search/read/
+  extract phase protocol; bounded Tavily and scraper payloads; deterministic
+  source authority and read-replay preservation; exact persisted-passage quote
+  grounding; ungrounded entity rejection; rejected-candidate evidence
+  quarantine with valid-support-path verification; realistic per-task planning
+  reserves and dynamic plan admission; durable root lease/attempt recovery;
+  explicit reportable complete-with-gaps convergence plus honest zero-evidence
+  failure; exact-gap and empty-section Writer normalization without relaxing
+  factual traceability; causal failure prioritization; balanced evidence/report
+  spans; and authoritative Console five-role/stage projection.
+Boundary check: No new role, provider, external protocol, evidence state,
+  reviewer rubric, scheduler transition, evaluation/evolution release action,
+  compatibility facade, deployment, main/release merge, online modification or
+  RL work was added. Search relevance never becomes source authority; rejected
+  evidence never becomes factual; Writer verified-only, exact-gap and citation
+  invariants remain strict. A new convergence result names the already-required
+  bounded, cited report-with-gaps outcome without weakening no-evidence failure.
+Tests: 289 tests passed in normal order and 289 passed with test files in
+  reverse order; JavaScript syntax, Python compilation and git diff checks
+  passed. Focused coverage includes command identity/JSON repair, scheduler
+  retry and root completion, phase transitions, provider payload bounds,
+  source authority/read replay, exact quote selection, ungrounded rejection,
+  evidence quarantine, bounded reportable gaps, Writer empty-section handling,
+  causal error ordering and Console projections.
+Failure/recovery tests: Live traces covered schema exhaustion, malformed model
+  JSON, provider/tool failures, task budget exhaustion, partial Worker results,
+  source-discovery supersession, root-lease completion, research-budget stops,
+  repair-round ownership, rejected noisy evidence, Writer domain validation and
+  downstream role attribution. SQLite restart/replay, cancellation, approval,
+  concurrency, protocol, reporting and projection recovery remain covered by
+  both complete suite orders.
+Integration merge commit: pending
+Remote push: pending
+Remaining risks: The final post-fix configured live retry received permanent
+  DeepSeek HTTP 402 on its first Supervisor call, so a fresh terminal online
+  report requires restored provider quota. Earlier same-session live runs
+  verified real Tavily/Jina/DeepSeek search, read, grounded ingestion and
+  independent verification through 100% section/citation coverage and exposed
+  the repaired Writer/convergence defects. The two suite warnings are upstream
+  websocket API deprecations and do not affect current MCP behavior.
 ```

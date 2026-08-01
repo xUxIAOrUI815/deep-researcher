@@ -33,6 +33,7 @@ class KnowledgeIngestingCommandBoundary:
         artifact_ids = list(observation.output_artifact_ids)
         entity_ids: list[str] = []
         issues: list[str] = []
+        candidate_entity_ids: tuple[str, ...] = ()
 
         if any(
             data.get(name)
@@ -69,16 +70,47 @@ class KnowledgeIngestingCommandBoundary:
             artifact_ids.extend(candidate.artifact_ids)
             entity_ids.extend(candidate.entity_ids)
             issues.extend(candidate.issues)
+            candidate_entity_ids = candidate.entity_ids
             self._attach_claims_to_sections(
                 run_id=command.run_id,
                 preferred_section_id=str(data.get("section_id") or "") or None,
                 entity_ids=candidate.entity_ids,
             )
 
+        persisted_counts = {
+            prefix.removesuffix("_"): sum(
+                item.startswith(prefix) for item in candidate_entity_ids
+            )
+            for prefix in (
+                "evidence_",
+                "fact_",
+                "claim_",
+                "citation_",
+                "conflict_",
+            )
+        }
+        strict_extract_complete = bool(
+            command.kind != CommandKind.EXTRACT
+            or (
+                not issues
+                and persisted_counts["evidence"] > 0
+                and persisted_counts["fact"] > 0
+                and persisted_counts["claim"] > 0
+                and persisted_counts["citation"]
+                >= persisted_counts["claim"]
+            )
+        )
+        if command.kind == CommandKind.EXTRACT:
+            data["semantic_complete"] = bool(
+                data.get("semantic_complete", False)
+                and strict_extract_complete
+            )
         data["ingestion"] = {
             "artifact_ids": list(dict.fromkeys(artifact_ids)),
             "entity_ids": list(dict.fromkeys(entity_ids)),
             "issues": issues,
+            "persisted_counts": persisted_counts,
+            "strict_extract_complete": strict_extract_complete,
         }
         if data.get("atomic_facts") and "facts" not in data:
             data["facts"] = data["atomic_facts"]

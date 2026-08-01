@@ -313,11 +313,36 @@ async def test_failure_retry_budget_deadline_and_lease_ownership_paths(tmp_path:
         lease_seconds=30,
         mutation_id="mutation_claim_completion_budget",
     )
-    exhausted_completion = await scheduler.complete(
+    limit_completion = await scheduler.complete(
         "task_completion_budget",
         TaskCompletion(result_id="result_over_budget", usage=BudgetUsage(tool_calls=1)),
         worker_id="agent_completion_budget",
         mutation_id="mutation_complete_over_budget",
+    )
+    assert limit_completion.envelope.status == TaskStatus.COMPLETED
+    assert limit_completion.result_id == "result_over_budget"
+    assert limit_completion.error_ref is None
+
+    await scheduler.submit(
+        _task("completion_overrun", budget=_budget(max_tool_calls=1)),
+        actor_id="agent_supervisor",
+        mutation_id="mutation_completion_overrun",
+    )
+    await scheduler.claim(
+        "run_scheduler",
+        worker_id="agent_completion_overrun",
+        limit=1,
+        lease_seconds=30,
+        mutation_id="mutation_claim_completion_overrun",
+    )
+    exhausted_completion = await scheduler.complete(
+        "task_completion_overrun",
+        TaskCompletion(
+            result_id="result_actual_overrun",
+            usage=BudgetUsage(tool_calls=2),
+        ),
+        worker_id="agent_completion_overrun",
+        mutation_id="mutation_complete_actual_overrun",
     )
     assert exhausted_completion.envelope.status == TaskStatus.FAILED
     assert exhausted_completion.result_id is None
@@ -345,6 +370,61 @@ async def test_failure_retry_budget_deadline_and_lease_ownership_paths(tmp_path:
         mutation_id="mutation_recover_stale",
     )
     assert recovered.recovered_task_ids == ("task_stale_lease",)
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_claim_fails_ready_task_whose_attempt_capacity_is_exhausted(
+    tmp_path: Path,
+):
+    scheduler = _native(tmp_path / "attempt_guard.sqlite3", MutableClock())
+    await scheduler.create_run(
+        "run_attempt_guard",
+        max_concurrency=1,
+        actor_id="agent_supervisor",
+        mutation_id="mutation_attempt_guard_run",
+    )
+    await scheduler.submit(
+        _task("attempt_guard", run_id="run_attempt_guard", max_attempts=2),
+        actor_id="agent_supervisor",
+        mutation_id="mutation_attempt_guard_submit",
+    )
+
+    for attempt in (1, 2):
+        leases = await scheduler.claim(
+            "run_attempt_guard",
+            worker_id="agent_worker",
+            limit=1,
+            lease_seconds=30,
+            mutation_id=f"mutation_attempt_guard_claim_{attempt}",
+        )
+        assert leases[0].task.attempt == attempt
+        await scheduler.pause_task(
+            "task_attempt_guard",
+            worker_id="agent_worker",
+            reason="Control turn completed.",
+            mutation_id=f"mutation_attempt_guard_pause_{attempt}",
+        )
+        await scheduler.resume_task(
+            "task_attempt_guard",
+            actor_id="agent_supervisor",
+            mutation_id=f"mutation_attempt_guard_resume_{attempt}",
+        )
+
+    leases = await scheduler.claim(
+        "run_attempt_guard",
+        worker_id="agent_worker",
+        limit=1,
+        lease_seconds=30,
+        mutation_id="mutation_attempt_guard_claim_exhausted",
+    )
+    assert leases == ()
+    exhausted = (
+        await scheduler.snapshot("run_attempt_guard")
+    ).by_id["task_attempt_guard"]
+    assert exhausted.envelope.status == TaskStatus.FAILED
+    assert exhausted.error_ref == "error_lease_attempts_exhausted"
+    assert exhausted.envelope.attempt == exhausted.envelope.max_attempts == 2
     await scheduler.close()
 
 

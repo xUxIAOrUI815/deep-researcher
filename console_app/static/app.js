@@ -1201,6 +1201,17 @@ function runtimeErrorCallout(runtime, scheduler) {
           <p class="eyebrow">${isFailure ? "RUN FAILED" : "RUN CANCELLED"}</p>
           <h2>${escapeHtml(runtime.error_code || statusLabel(runtime.status))}</h2>
           <p>${escapeHtml(runtime.error_message || scheduler.cancellation_reason || "运行已进入终止状态，已生成的事件、证据与制品均被保留。")}</p>
+          ${runtime.causal_errors?.length ? `
+            <ol class="causal-error-chain" aria-label="运行错误因果链">
+              ${runtime.causal_errors.map((error, index) => `
+                <li class="${error.is_primary ? "primary" : "downstream"}">
+                  <strong>${escapeHtml(error.code || `error-${index + 1}`)}</strong>
+                  <span>${escapeHtml(error.message || "运行错误")}</span>
+                  <small>#${escapeHtml(error.sequence_no)} · ${escapeHtml(roleLabelFromActor(error.actor_id))} · ${escapeHtml(error.category)}</small>
+                </li>
+              `).join("")}
+            </ol>
+          ` : ""}
         </div>
       </div>
     </section>

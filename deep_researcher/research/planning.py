@@ -16,6 +16,7 @@ from deep_researcher.contracts import (
     ObservationStatus,
     StopReason,
     TaskEnvelope,
+    TaskKind,
     TaskStatus,
     utc_now,
 )
@@ -206,10 +207,43 @@ class SupervisorPlanningModelAdapter(ModelAdapter):
                 "Supervisor cannot stop before the authoritative convergence "
                 "gate permits termination"
             )
-        max_tasks = int(context.get("max_tasks_per_plan", 32))
+        max_tasks = int(context.get("max_tasks_per_plan", 6))
         if len(plan.tasks) > max_tasks:
             raise ValueError(
                 f"Supervisor plan exceeds max_tasks_per_plan={max_tasks}"
+            )
+        minimum_extraction_calls = int(
+            context.get("minimum_model_calls_per_extraction_task", 3)
+        )
+        underfunded = {
+            item.proposal_key: item.budget.max_model_calls
+            for item in plan.tasks
+            if item.kind != TaskKind.SOURCE_DISCOVERY
+            and item.budget.max_model_calls is not None
+            and item.budget.max_model_calls < minimum_extraction_calls
+        }
+        if underfunded:
+            raise ValueError(
+                "Research tasks must reserve enough model calls for read, "
+                "extract, and bounded grounding repair; required "
+                f"max_model_calls>={minimum_extraction_calls}: {underfunded}"
+            )
+        minimum_extraction_tokens = int(
+            context.get("minimum_tokens_per_extraction_task", 0)
+        )
+        token_underfunded = {
+            item.proposal_key: item.budget.max_tokens
+            for item in plan.tasks
+            if item.kind != TaskKind.SOURCE_DISCOVERY
+            and minimum_extraction_tokens > 0
+            and item.budget.max_tokens is not None
+            and item.budget.max_tokens < minimum_extraction_tokens
+        }
+        if token_underfunded:
+            raise ValueError(
+                "Research tasks must reserve enough tokens for read, extract, "
+                "and bounded grounding repair; required "
+                f"max_tokens>={minimum_extraction_tokens}: {token_underfunded}"
             )
         allowed_workers = {
             str(item)
@@ -254,7 +288,17 @@ class SupervisorPlanningModelAdapter(ModelAdapter):
                 "research tasks with explicit dependencies, constraints, "
                 "artifact inputs, schemas, budgets, priorities, deadlines, and "
                 "attempt limits. Do not call providers, write report prose, or "
-                "expose hidden reasoning. Use a short decision_summary."
+                "expose hidden reasoning. Use a short decision_summary. When "
+                "the supervisor context reports persisted sources but no "
+                "facts, evidence, or claims, the plan must advance those known "
+                "sources into extraction/section-support work; it must not "
+                "repeat broad source-discovery tasks. Extraction work should "
+                "read a bounded set of known_source_candidates and then call "
+                "research.extract with exact quotes. Obey the contextual "
+                "max_tasks_per_plan exactly. Every non-source-discovery path "
+                "must budget four turns and 64000 tokens for search, bounded "
+                "source reading, exact-quote extraction, and one repair. Keep "
+                "each extract to at most three claims."
             ),
             messages=request.messages,
             command_schema=SupervisorPlan.model_json_schema(),
@@ -439,6 +483,7 @@ class SupervisorActionExecutor:
                 "available_worker_tools",
                 "worker_tool_contracts",
                 "evidence_rules",
+                "known_source_candidates",
             )
             if key in root_constraints
         }

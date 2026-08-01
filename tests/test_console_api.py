@@ -11,6 +11,7 @@ from console_app.service import ResearchConsoleService
 from deep_researcher.application import (
     ApplicationRunStatus,
     ResearchCreateRequest,
+    TimelineEventSummary,
 )
 from deep_researcher.contracts import BudgetUsage
 from deep_researcher.kernel import ModelResponse
@@ -19,6 +20,56 @@ from tests.fixtures.background001_application import (
     STATEMENT,
     build_deterministic_application,
 )
+
+
+def test_console_causal_chain_promotes_authoritative_terminal_error():
+    timeline = tuple(
+        TimelineEventSummary(
+            event_type="kernel_event",
+            timestamp="2026-08-01T00:00:00+00:00",
+            sequence_no=sequence,
+            actor_id="agent:worker",
+            task_id="task:extract",
+            payload={"error": error},
+        )
+        for sequence, error in (
+            (
+                10,
+                {
+                    "error_id": "error_recovered_schema",
+                    "category": "schema_validation",
+                    "code": "command_schema_invalid",
+                    "message": "The command was repaired.",
+                    "retryable": True,
+                },
+            ),
+            (
+                22,
+                {
+                    "error_id": "error_terminal_action",
+                    "category": "internal",
+                    "code": "action_execution_failed",
+                    "message": "The extraction action failed.",
+                    "fatal": True,
+                },
+            ),
+        )
+    )
+
+    errors = ResearchConsoleService._causal_errors(
+        timeline,
+        primary_error_refs=("error_terminal_action",),
+        primary_code="action_execution_failed",
+        primary_message="The extraction action failed.",
+    )
+
+    assert [item.error_id for item in errors] == [
+        "error_terminal_action",
+        "error_recovered_schema",
+    ]
+    assert errors[0].is_primary is True
+    assert errors[0].sequence_no == 22
+    assert errors[1].is_primary is False
 
 
 async def _wait_for_status(
@@ -407,7 +458,9 @@ async def test_console_workspace_exposes_cancelled_and_failed_boundaries(
             failed_record.research_id
         )
         assert failed.runtime.status == "failed"
-        assert failed.runtime.error_code == "application_runtimeerror"
+        assert failed.runtime.error_code == "model_invocation_failed"
+        assert failed.runtime.causal_errors
+        assert failed.runtime.causal_errors[0].is_primary is True
         assert "sk-123" not in (failed.runtime.error_message or "")
         assert failed.actions.terminal is True
         assert failed.actions.can_cancel is False
@@ -421,3 +474,63 @@ async def test_console_workspace_exposes_cancelled_and_failed_boundaries(
         await failed_service.aclose()
         await failed_runtime.aclose()
         failed_tools.close()
+
+
+@pytest.mark.asyncio
+async def test_console_projects_worker_root_cause_and_failed_role_stage(
+    tmp_path: Path,
+):
+    class MalformedWorkerModel:
+        async def complete(self, request):
+            return ModelResponse(
+                structured={
+                    "commands": [
+                        {
+                            "arguments": {
+                                "operation": "search",
+                                "query": "RAG papers",
+                            }
+                        }
+                    ]
+                },
+                usage=BudgetUsage(model_calls=1),
+            )
+
+        async def repair(self, request, invalid_response, errors):
+            return await self.complete(request)
+
+    runtime, tools, _ = build_deterministic_application(
+        tmp_path / "worker-root-cause",
+        worker_model=MalformedWorkerModel(),
+    )
+    service = ResearchConsoleService(runtime=runtime)
+    try:
+        created = runtime.new_run(
+            ResearchCreateRequest(query="Research RAG papers.")
+        )
+        failed = await runtime.execute(created.research_id)
+        assert failed.status == ApplicationRunStatus.FAILED
+        workspace = await service.get_console_workspace(
+            created.research_id
+        )
+        assert workspace.runtime.error_code == "command_schema_invalid"
+        assert workspace.runtime.causal_errors[0].code == (
+            "command_schema_invalid"
+        )
+        assert workspace.runtime.causal_errors[0].is_primary is True
+        roles = {
+            item.role_id: item.status for item in workspace.runtime.roles
+        }
+        assert roles["research_worker_pool"] == "failed"
+        assert roles["synthesis_writer"] == "waiting"
+        assert roles["report_reviewer"] == "waiting"
+        progress = {
+            item.step_id: item.status for item in workspace.runtime.progress
+        }
+        assert progress["research"] == "failed"
+        assert progress["synthesis"] == "waiting"
+        assert workspace.reporting.revision_count == 0
+    finally:
+        await service.aclose()
+        await runtime.aclose()
+        tools.close()

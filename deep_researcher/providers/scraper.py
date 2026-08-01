@@ -3,11 +3,16 @@ import httpx
 import os
 import re
 from typing import Optional, List
-from datetime import datetime
 from dataclasses import dataclass
 from httpx import HTTPStatusError, TimeoutException
 
+from deep_researcher.contracts import utc_now
+
 from .models import ScrapedDocument
+
+
+def _capture_metadata(**values: object) -> dict[str, object]:
+    return {"captured_at": utc_now().isoformat(), **values}
 
 JINA_API_KEY = os.getenv("JINA_API_KEY", "")
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY", "")
@@ -152,7 +157,7 @@ class SmartScraper:
                     markdown=markdown,
                     title=title,
                     fetch_method="playwright",
-                    timestamp=datetime.now()
+                    metadata=_capture_metadata(),
                 )
 
         except ImportError:
@@ -161,7 +166,7 @@ class SmartScraper:
                 markdown="",
                 title="",
                 fetch_method="playwright",
-                timestamp=datetime.now(),
+                metadata=_capture_metadata(),
                 error="Playwright not installed"
             )
         except Exception as e:
@@ -170,7 +175,7 @@ class SmartScraper:
                 markdown="",
                 title="",
                 fetch_method="playwright",
-                timestamp=datetime.now(),
+                metadata=_capture_metadata(),
                 error=str(e)
             )
 
@@ -346,7 +351,10 @@ class SmartScraper:
                 markdown="",
                 title=scraped.title,
                 fetch_method=scraped.fetch_method,
-                timestamp=datetime.now(),
+                metadata=_capture_metadata(
+                    **scraped.metadata,
+                    discard_reason="semantic_filter",
+                ),
                 error="Semantic filter discarded"
             ), stats
 
@@ -356,7 +364,15 @@ class SmartScraper:
         token_saved = stats.original_length - stats.cleaned_length
         self._token_savings += token_saved
 
-        scraped.markdown = level3_md
+        scraped = scraped.model_copy(
+            update={
+                "markdown": level3_md,
+                "metadata": _capture_metadata(
+                    **scraped.metadata,
+                    denoised=True,
+                ),
+            }
+        )
 
         return scraped, stats
 
@@ -383,7 +399,7 @@ class SmartScraper:
                     markdown="",
                     title="",
                     fetch_method="unknown",
-                    timestamp=datetime.now(),
+                    metadata=_capture_metadata(),
                     error=str(result)
                 ))
                 all_stats.append(stats)
@@ -418,7 +434,7 @@ class SmartScraper:
                 markdown=text,
                 title=title,
                 fetch_method="jina",
-                timestamp=datetime.now()
+                metadata=_capture_metadata(),
             )
 
     async def scrape(
@@ -466,7 +482,7 @@ class SmartScraper:
                     markdown="",
                     title="",
                     fetch_method="unknown",
-                    timestamp=datetime.now(),
+                    metadata=_capture_metadata(),
                     error=str(result)
                 ))
             else:

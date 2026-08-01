@@ -1,6 +1,7 @@
 from .kernel import AgentKernel, KernelConfig, KernelRunResult
 from .events import EventRecorderKernelSink, component_versions_for_agent
 from .middleware import (
+    build_command_schema,
     CommandPolicyChecker,
     ContextBuilder,
     REQUIRED_MIDDLEWARE_STAGES,

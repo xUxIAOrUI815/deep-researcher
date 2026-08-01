@@ -701,11 +701,27 @@ class EvidenceVerificationEngine:
         elif support_source_ids and len(stale_source_ids) == len(support_source_ids):
             claim_status = ClaimStatus.STALE
         else:
-            blocking = any(
-                item.severity
-                in {VerificationSeverity.ERROR, VerificationSeverity.CRITICAL}
-                for item in issues
-            )
+            # Rejected candidate evidence must not poison an otherwise fully
+            # grounded claim.  Keep claim-level, conflict-level, and issues on
+            # the surviving support path blocking; issues attached only to an
+            # evidence item that was already rejected are quarantined with
+            # that item.  This preserves strict citation/evidence validation
+            # without requiring every noisy candidate relation to be valid.
+            def blocks_claim(item: VerificationIssue) -> bool:
+                return item.severity in {
+                    VerificationSeverity.ERROR,
+                    VerificationSeverity.CRITICAL,
+                } and (
+                    item.subject_id == claim.claim_id
+                    or item.subject_id in severe_open_conflicts
+                    or bool(
+                        set(item.evidence_ids).intersection(
+                            support_evidence_ids
+                        )
+                    )
+                )
+
+            blocking = any(blocks_claim(item) for item in issues)
             complete_support = (
                 support_score >= self.policy.support_threshold
                 and citation_coverage >= self.policy.citation_coverage_threshold
@@ -719,6 +735,28 @@ class EvidenceVerificationEngine:
                 if complete_support
                 else ClaimStatus.PARTIALLY_SUPPORTED
             )
+            if claim_status == ClaimStatus.SUPPORTED:
+                issues = [
+                    (
+                        item
+                        if blocks_claim(item)
+                        or item.severity
+                        not in {
+                            VerificationSeverity.ERROR,
+                            VerificationSeverity.CRITICAL,
+                        }
+                        else item.model_copy(
+                            update={
+                                "severity": VerificationSeverity.WARNING,
+                                "metadata": {
+                                    **item.metadata,
+                                    "quarantined_candidate_evidence": True,
+                                },
+                            }
+                        )
+                    )
+                    for item in issues
+                ]
 
         if claim_status in {
             ClaimStatus.UNSUPPORTED,
