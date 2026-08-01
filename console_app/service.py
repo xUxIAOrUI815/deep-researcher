@@ -270,6 +270,14 @@ class ResearchConsoleService:
             active_task=active,
             timeline=timeline,
             task_records=task_records,
+            failure_role_id=next(
+                (
+                    self._role_id(item.actor_id)
+                    for item in causal_errors
+                    if item.is_primary and self._role_id(item.actor_id)
+                ),
+                None,
+            ),
             decision_summary=(
                 "; ".join(latest_decision.reasons)
                 if latest_decision is not None
@@ -651,6 +659,7 @@ class ResearchConsoleService:
         active_task: Any | None,
         timeline: tuple[TimelineEventSummary, ...],
         task_records: tuple[Any, ...],
+        failure_role_id: str | None,
         decision_summary: str,
     ) -> tuple[tuple[ConsoleRoleView, ...], str | None]:
         definitions = (
@@ -748,7 +757,13 @@ class ResearchConsoleService:
                     if status == "waiting_approval"
                     else "active"
                 )
-            elif status == "failed" and role_id == last_role:
+            elif status == "failed" and role_id == failure_role_id:
+                role_status = "failed"
+            elif (
+                status == "failed"
+                and failure_role_id is None
+                and role_id == last_role
+            ):
                 role_status = "failed"
             elif status == "cancelled" and role_id == last_role:
                 role_status = "cancelled"
