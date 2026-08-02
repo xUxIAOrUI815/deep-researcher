@@ -72,6 +72,48 @@ def test_console_causal_chain_promotes_authoritative_terminal_error():
     assert errors[1].is_primary is False
 
 
+def test_console_prefers_writer_cause_over_application_terminal_wrapper():
+    timeline = (
+        TimelineEventSummary(
+            event_type="model_failed",
+            timestamp="2026-08-01T00:00:00+00:00",
+            sequence_no=10,
+            actor_id="agent_synthesis_writer",
+            task_id="task_writer",
+            payload={
+                "error": {
+                    "category": "verification",
+                    "code": "model_invocation_failed",
+                    "message": "Writer proposal remained invalid.",
+                    "fatal": True,
+                }
+            },
+        ),
+        TimelineEventSummary(
+            event_type="run_failed",
+            timestamp="2026-08-01T00:01:00+00:00",
+            sequence_no=11,
+            actor_id="runtime_application",
+            task_id=None,
+            payload={
+                "error": {
+                    "category": "internal",
+                    "code": "application_runtimeerror",
+                    "message": "Writer failed: The model could not produce a decision.",
+                    "fatal": True,
+                }
+            },
+        ),
+    )
+    errors = ResearchConsoleService._causal_errors(
+        timeline,
+        primary_code="application_runtimeerror",
+        primary_message="Writer failed: The model could not produce a decision.",
+    )
+    assert errors[0].code == "model_invocation_failed"
+    assert errors[0].is_primary is True
+
+
 async def _wait_for_status(
     service: ResearchConsoleService,
     research_id: str,

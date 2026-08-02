@@ -104,6 +104,7 @@ class ManagedEvidenceEventSink(EvidenceEventSink):
         )
         self._started = False
         self._closed = False
+        self._completed_work = False
         self._lock = threading.RLock()
         self._delegate = EventRecorderEvidenceSink(
             recorder,
@@ -131,6 +132,15 @@ class ManagedEvidenceEventSink(EvidenceEventSink):
                 )
                 self._started = True
             self._delegate.emit(event)
+            if event.event_type == EventType.VERIFICATION_COMPLETED:
+                self._completed_work = True
+
+    @property
+    def completed_work(self) -> bool:
+        """Whether a verifier completed independently before a later failure."""
+
+        with self._lock:
+            return self._completed_work
 
     def close(self, *, failed: bool = False) -> None:
         with self._lock:

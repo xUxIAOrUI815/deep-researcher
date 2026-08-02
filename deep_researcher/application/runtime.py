@@ -577,7 +577,15 @@ class ApplicationRuntime:
             await self._cancel_scheduler(record.run_id, error.message)
             event_run = self.event_store.get_run(record.run_id)
             if event_run is not None and event_run.terminal_event_id is None:
-                controller.fail(error=error, usage=BudgetUsage())
+                # A reporting failure must not retroactively turn an already
+                # completed verification span into a failed evidence stage.
+                # The run remains failed, while the timeline keeps the true
+                # Writer/Reviewer cause separate from completed evidence work.
+                controller.fail(
+                    error=error,
+                    usage=BudgetUsage(),
+                    evidence_failed=not controller.evidence_sink.completed_work,
+                )
             return self.application_store.transition(
                 research_id,
                 status=ApplicationRunStatus.FAILED,

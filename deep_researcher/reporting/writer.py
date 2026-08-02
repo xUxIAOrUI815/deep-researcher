@@ -204,6 +204,23 @@ class SynthesisWriterModelAdapter(ModelAdapter):
                         section.section_id: list(section.conflict_ids)
                         for section in packet.sections
                     },
+                    "allowed_claim_ids_by_section": {
+                        section.section_id: list(section.verified_claim_ids)
+                        for section in packet.sections
+                    },
+                    "allowed_citation_ids_by_section": {
+                        section.section_id: [
+                            citation.citation_id
+                            for citation in packet.citations
+                            if citation.claim_id in section.verified_claim_ids
+                        ]
+                        for section in packet.sections
+                    },
+                    "empty_sections_must_have_zero_statements": [
+                        section.section_id
+                        for section in packet.sections
+                        if not section.verified_claim_ids
+                    ],
                     "empty_id_list_means_disclose_none": True,
                     "never_invent_claim_or_conflict_ids": True,
                 },
@@ -266,6 +283,13 @@ class SynthesisWriterModelAdapter(ModelAdapter):
                 ValueError,
                 json.JSONDecodeError,
             ) as exc:
+                self._persist_proposal_attempt(
+                    request=request,
+                    response=current,
+                    attempt=attempt,
+                    valid=False,
+                    error=str(exc),
+                )
                 if attempt >= self.max_proposal_repairs:
                     raise ModelInvocationError(
                         "Writer proposal remained invalid after bounded repair: "
@@ -283,6 +307,13 @@ class SynthesisWriterModelAdapter(ModelAdapter):
                     )
                 )
                 continue
+            self._persist_proposal_attempt(
+                request=request,
+                response=current,
+                attempt=attempt,
+                valid=True,
+                proposal=proposal,
+            )
             artifact_id = str(
                 _constraints(request)["evidence_packet_artifact_id"]
             )
@@ -319,7 +350,7 @@ class SynthesisWriterModelAdapter(ModelAdapter):
     ) -> WriterDraftProposal:
         constraints = _constraints(request)
         value = deepcopy(_payload(response, "proposal"))
-        SynthesisWriterModelAdapter._remove_untraceable_empty_section_narrative(
+        removed = SynthesisWriterModelAdapter._remove_untraceable_empty_section_narrative(
             value,
             packet,
         )
@@ -328,13 +359,28 @@ class SynthesisWriterModelAdapter(ModelAdapter):
             report_id=str(constraints["report_id"]),
             revision=int(constraints["revision"]),
         )
-        return WriterDraftProposal.model_validate(value, strict=False)
+        proposal = WriterDraftProposal.model_validate(value, strict=False)
+        if removed:
+            # The original provider response is separately persisted below;
+            # retain the deterministic boundary repair as an auditable artifact
+            # instead of allowing untraceable prose to disappear silently.
+            proposal = proposal.model_copy(
+                update={
+                    "decision_summary": (
+                        proposal.decision_summary
+                        + " [Boundary-normalized empty sections: "
+                        + ", ".join(sorted(removed))
+                        + "]"
+                    )[:4000]
+                }
+            )
+        return proposal
 
     @staticmethod
     def _remove_untraceable_empty_section_narrative(
         value: dict[str, Any],
         packet: WriterEvidencePacket,
-    ) -> None:
+    ) -> tuple[str, ...]:
         """Discard model prose where the evidence packet permits no citation.
 
         Report plans intentionally contain boundary sections such as the
@@ -344,7 +390,9 @@ class SynthesisWriterModelAdapter(ModelAdapter):
         sentence with both ID lists empty.  That sentence must not be repaired
         by borrowing unrelated evidence.  Remove only that exact, provably
         untraceable shape; partially linked statements and statements in a
-        section with verified claims still fail normal validation.
+        section with verified claims still fail normal validation.  Any
+        normalized provider response is retained as a Writer proposal-attempt
+        artifact, so this is not a silent relocation or a validation bypass.
         """
 
         empty_section_ids = {
@@ -354,7 +402,8 @@ class SynthesisWriterModelAdapter(ModelAdapter):
         }
         sections = value.get("sections")
         if not isinstance(sections, list):
-            return
+            return ()
+        removed_from: list[str] = []
         for section in sections:
             if (
                 not isinstance(section, dict)
@@ -364,15 +413,50 @@ class SynthesisWriterModelAdapter(ModelAdapter):
             statements = section.get("statements")
             if not isinstance(statements, list):
                 continue
-            section["statements"] = [
-                statement
-                for statement in statements
-                if not (
-                    isinstance(statement, dict)
-                    and not statement.get("claim_ids")
-                    and not statement.get("citation_ids")
-                )
-            ]
+            if statements:
+                removed_from.append(str(section.get("section_id")))
+            # An empty evidence boundary can never contain factual prose,
+            # regardless of whether a provider tried to borrow IDs from
+            # another section.  Required claim coverage is still enforced in
+            # the section that actually owns the claim.
+            section["statements"] = []
+        return tuple(removed_from)
+
+    def _persist_proposal_attempt(
+        self,
+        *,
+        request: ModelRequest,
+        response: ModelResponse,
+        attempt: int,
+        valid: bool,
+        error: str | None = None,
+        proposal: WriterDraftProposal | None = None,
+    ) -> None:
+        artifact_id = str(_constraints(request)["evidence_packet_artifact_id"])
+        self.artifact_store.put_json(
+            {
+                "schema": "WriterProposalAttempt@1",
+                "attempt": attempt,
+                "valid": valid,
+                "error": error,
+                "provider_response": {
+                    "content": response.content,
+                    "structured": response.structured,
+                    "response_id": response.response_id,
+                    "finish_reason": response.finish_reason,
+                },
+                "normalized_proposal": (
+                    proposal.model_dump(mode="json") if proposal is not None else None
+                ),
+            },
+            kind=ArtifactKind.MODEL_OUTPUT,
+            producer_id="agent_synthesis_writer",
+            run_id=request.run_id,
+            task_id=request.task_id,
+            content_schema="WriterProposalAttempt@1",
+            source_artifact_ids=(artifact_id,),
+            metadata={"attempt": attempt, "valid": valid},
+        )
 
 
 class WriterTraceabilityError(ValueError):

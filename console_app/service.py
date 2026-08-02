@@ -900,6 +900,23 @@ class ResearchConsoleService:
                 ),
                 None,
             )
+        if (
+            primary_index is not None
+            and primary_code.startswith("application_")
+        ):
+            # The terminal application wrapper is useful for machine status,
+            # but an earlier non-retryable agent failure explains what the
+            # user can actually fix.  Prefer that causal event in the console.
+            primary_index = next(
+                (
+                    index
+                    for index in range(len(values) - 1, -1, -1)
+                    if not values[index].code.startswith("application_")
+                    and values[index].fatal
+                    and not values[index].retryable
+                ),
+                primary_index,
+            )
         if primary_index is None:
             primary_index = 0
         primary = values.pop(primary_index).model_copy(

@@ -137,6 +137,7 @@ All five logical roles are mandatory and share AgentKernel + AgentSpec:
 | 15 | `codex/bg001-15-integration-hardening` | integrated | c241efc | Production composition, draft removal, native-scheduler ADR, full recovery/security/stress gates, and capability-boundary documentation complete. |
 | 16 | `codex/bg001-16-console-runtime-alignment` | integrated | 1d9c3f4 | Complete root Console projection, operational workspace, report lifecycle, actions, accessibility, and browser/API contract alignment. |
 | 17 | `codex/bg001-17-live-runtime-contract-recovery` | integrated | 4c3fff5 | Strict live Worker contracts, governed phase protocol, grounded ingestion, bounded recovery/convergence, verified-only reporting repair, causal errors, and Console role/stage projection complete. |
+| 18 | `codex/bg001-18-live-research-quality-recovery` | in progress | pending | Reject non-content/error pages before factual ingestion; require question-relevant reportable coverage; make Writer section generation and repair exact-boundary-safe; preserve failed Writer artifacts and root causes; and close Evidence spans by their own lifecycle. |
 
 ## 00 - Foundation contracts and baseline
 
@@ -675,6 +676,61 @@ Merge gate:
 - The Console shows authoritative role/stage failure and the complete causal
   chain. Focused, full normal/reverse, restart/failure-path, and real live-run
   browser verification pass.
+
+## 18 - Live research quality and reporting recovery
+
+Branch: `codex/bg001-18-live-research-quality-recovery`
+
+Complete deliverables:
+
+- Detect access-denied, authentication, challenge, error and other
+  non-content documents at the governed read/ingestion boundary; preserve their
+  source snapshots and an auditable access-gap observation, but prevent them
+  from becoming Evidence, Fact, Claim or Citation.
+- Enforce root-question relevance through candidate extraction, evidence
+  verification and convergence. A fact merely proving an inaccessible source,
+  or a source unrelated to the root question, cannot satisfy required Findings
+  coverage or make research reportable.
+- Build a run-specific Writer generation contract from the verified packet:
+  only sections with verified claims are model-generated; empty sections use
+  deterministic evidence-boundary material, exact persisted gaps and conflicts.
+  The Writer must receive per-section allowed Claim/Citation identifiers and
+  bounded repair feedback. Preserve every invalid and repaired proposal as
+  redacted immutable artifacts with causal links.
+- Keep strict verified-only, exact-gap, exact-citation and per-section
+  traceability validation. On a Writer section-boundary violation, repair or
+  reject it; never move an identifier across a section silently or relax the
+  validator to accept it.
+- Close the Evidence Verifier span immediately after its independent work and
+  preserve its completed result when later reporting fails. Attribute the
+  primary Console/runtime failure to the earliest causal Writer error rather
+  than an outer application wrapper.
+- Add deterministic regressions reproducing the FAA Access Denied candidate,
+  irrelevant-query drift, section-boundary Writer output, repair artifact
+  persistence, failure causal ordering and completed-verifier/reporting-failed
+  projection; finish with a configured live DeepSeek/Tavily browser run when
+  provider availability permits.
+
+Boundary:
+
+- No new role, provider, external protocol, evidence state, reviewer rubric,
+  scheduler transition, compatibility facade, deployment, main/release merge,
+  online self-modification or RL work.
+- Do not replace strict factual provenance with heuristic acceptance. Error
+  pages remain durable operational evidence only, never research findings;
+  deterministic empty-section rendering must not borrow claims or citations.
+
+Merge gate:
+
+- Access-denied/challenge/error content remains auditable but cannot create a
+  verified factual graph or satisfy convergence. An irrelevant but well-cited
+  claim cannot complete the required Findings section.
+- A live-shaped invalid Writer proposal is persisted, repaired within budget
+  when possible, and otherwise surfaces its precise primary causal failure;
+  valid reports retain exact section-local provenance.
+- Evidence completion remains completed when a later Writer/Reviewer failure
+  terminates the run. Focused, full normal/reverse, restart/failure-path and
+  configured live browser verification pass.
 
 ## Execution records
 

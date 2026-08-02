@@ -47,6 +47,54 @@ from .storage import KnowledgeEntity
 _VALID_ID = re.compile(r"^[a-z][a-z0-9_]*_[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 
 
+# These are operational interstitials, not research content.  The check is
+# intentionally phrase-based and requires a compact page or a corroborating
+# title/status signal, so a substantive article *about* access controls is not
+# rejected merely for mentioning one of these terms.
+_NON_CONTENT_MARKERS = (
+    "access denied",
+    "request rejected",
+    "forbidden",
+    "captcha",
+    "verify you are human",
+    "unusual traffic",
+    "attention required",
+    "temporarily unavailable",
+)
+
+
+def _non_content_reason(
+    *,
+    title: str | None,
+    body: str,
+    http_status: int | None,
+) -> str | None:
+    """Return an auditable reason when a fetched page is not source content."""
+
+    normalized_title = normalize_text(title or "").casefold()
+    normalized_body = normalize_text(body).casefold()
+    status_blocked = http_status in {401, 403, 407, 429, 451, 503}
+    marker = next(
+        (item for item in _NON_CONTENT_MARKERS if item in normalized_title),
+        None,
+    )
+    if marker is None:
+        marker = next(
+            (item for item in _NON_CONTENT_MARKERS if item in normalized_body),
+            None,
+        )
+    # A known denial status makes one marker decisive.  Otherwise require a
+    # short interstitial or a matching title, avoiding keyword-only false
+    # positives in normal long-form source material.
+    if marker and (
+        status_blocked
+        or marker in normalized_title
+        or len(normalized_body) <= 1_200
+    ):
+        return f"non-content interstitial detected: {marker}"
+    return None
+
+
 def stable_id(prefix: str, value: str) -> str:
     normalized = str(value or "").strip()
     if _VALID_ID.fullmatch(normalized) and normalized.startswith(f"{prefix}_"):
@@ -490,6 +538,32 @@ class KnowledgeIngestionService:
             if not body:
                 issues.append(f"source has no snapshot body: {url}")
                 continue
+            http_status = int(scraped_item.get("http_status", 200) or 200)
+            non_content_reason = _non_content_reason(
+                title=(
+                    str(scraped_item.get("title") or raw_source.get("title") or "")
+                ),
+                body=body,
+                http_status=http_status,
+            )
+            if non_content_reason is not None:
+                # Keep the raw observation and its snapshot for reproducible
+                # access-gap diagnostics, but never manufacture a Passage.
+                # Candidate ingestion only accepts grounded passages, so this
+                # makes it impossible for an error/denial page to become
+                # Evidence, Fact, Claim, or Citation.
+                source = source.model_copy(
+                    update={
+                        "status": SourceStatus.BLOCKED,
+                        "metadata": {
+                            **source.metadata,
+                            "content_admission": "rejected_non_content",
+                            "content_admission_reason": non_content_reason,
+                        },
+                    }
+                )
+                entities[-1] = source
+                issues.append(f"source content rejected: {url}: {non_content_reason}")
             snapshot_artifact = self.artifact_store.put_text(
                 body,
                 kind=ArtifactKind.SOURCE_SNAPSHOT,
@@ -530,13 +604,17 @@ class KnowledgeIngestionService:
                     ),
                     source_id=source_id,
                     artifact_id=snapshot_artifact.artifact_id,
-                    status=SnapshotStatus.NORMALIZED,
+                    status=(
+                        SnapshotStatus.FAILED
+                        if non_content_reason is not None
+                        else SnapshotStatus.NORMALIZED
+                    ),
                     source_level=source_level,
                     source_version=source_version,
                     content_hash=snapshot_artifact.content_hash,
                     final_url=url,
                     media_type=snapshot_artifact.media_type,
-                    http_status=int(scraped_item.get("http_status", 200) or 200),
+                    http_status=http_status,
                     capture_method=str(
                         scraped_item.get("fetch_method")
                         or raw_source.get("extraction_method")
@@ -550,10 +628,19 @@ class KnowledgeIngestionService:
                     ),
                     metadata={
                         "fetch_method": scraped_item.get("fetch_method")
-                        or raw_source.get("extraction_method")
+                        or raw_source.get("extraction_method"),
+                        "content_admission": (
+                            "rejected_non_content"
+                            if non_content_reason is not None
+                            else "accepted"
+                        ),
+                        "content_admission_reason": non_content_reason,
                     },
                 )
                 entities.append(snapshot)
+
+            if non_content_reason is not None:
+                continue
 
             for ordinal, raw_passage in enumerate(source_passages):
                 text = normalize_text(str(raw_passage.get("text", "")))
@@ -694,6 +781,16 @@ class KnowledgeIngestionService:
             if not candidates:
                 issues.append(
                     f"evidence has no persisted passage and was skipped: {legacy_id}"
+                )
+                continue
+            candidates = [
+                candidate
+                for candidate in candidates
+                if self._passage_is_admissible(candidate)
+            ]
+            if not candidates:
+                issues.append(
+                    f"evidence is grounded only in rejected source content and was skipped: {legacy_id}"
                 )
                 continue
             grounded = next(
@@ -1010,6 +1107,15 @@ class KnowledgeIngestionService:
                 extracted_at=passage.extracted_at,
             ),
         )
+
+    def _passage_is_admissible(self, passage: Passage) -> bool:
+        """Defend candidate ingestion against historical rejected snapshots."""
+
+        snapshot = self.repository.snapshots.get(passage.snapshot_id)
+        if snapshot is None or snapshot.status != SnapshotStatus.NORMALIZED:
+            return False
+        source = self.repository.sources.get(snapshot.source_id)
+        return source is not None and source.status == SourceStatus.ACCESSIBLE
 
     def create_report_scaffold(
         self,

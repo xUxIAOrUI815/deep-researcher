@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from deep_researcher.artifacts import ArtifactQuery
-from deep_researcher.contracts import ArtifactKind
+from deep_researcher.contracts import ArtifactKind, SnapshotStatus, SourceStatus
 from deep_researcher.knowledge import build_knowledge_runtime
 
 
@@ -251,6 +251,49 @@ def test_ungrounded_candidate_quote_cannot_create_claim_or_citation(tmp_path):
         assert runtime.repository.facts.list("run_ungrounded") == ()
         assert runtime.repository.claims.list("run_ungrounded") == ()
         assert runtime.repository.citations.list("run_ungrounded") == ()
+    finally:
+        runtime.close()
+
+
+def test_access_denied_interstitial_is_preserved_but_cannot_enter_evidence_graph(
+    tmp_path,
+):
+    runtime = build_knowledge_runtime(tmp_path / "runtime")
+    denied = deepcopy(RESEARCH)
+    denied["sources"][0]["title"] = "Access Denied"
+    denied["passages"][0]["text"] = "Access Denied"
+    denied["scraped_data_cache"][0].update(
+        {
+            "title": "Access Denied",
+            "markdown": "Access Denied. Your request has been blocked.",
+            "http_status": 403,
+        }
+    )
+    candidates = deepcopy(CANDIDATES)
+    candidates["evidence"][0]["quote"] = "Access Denied"
+    try:
+        observed = runtime.ingestion.ingest_research_observation(
+            denied,
+            run_id="run_access_denied",
+            task_id="task_access_denied",
+        )
+        result = runtime.ingestion.ingest_candidate_knowledge(
+            candidates,
+            run_id="run_access_denied",
+            task_id="task_access_denied",
+        )
+        source = runtime.repository.sources.list("run_access_denied")[0]
+        snapshot = runtime.repository.source_snapshots(source.source_id)[0]
+        assert source.status == SourceStatus.BLOCKED
+        assert snapshot.status == SnapshotStatus.FAILED
+        assert source.metadata["content_admission"] == "rejected_non_content"
+        assert observed.artifact_ids
+        assert any("no persisted passage" in item for item in result.issues)
+        assert runtime.repository.passages.list("run_access_denied") == ()
+        assert runtime.repository.evidence.list("run_access_denied") == ()
+        assert runtime.repository.facts.list("run_access_denied") == ()
+        assert runtime.repository.claims.list("run_access_denied") == ()
+        assert runtime.repository.citations.list("run_access_denied") == ()
     finally:
         runtime.close()
 
