@@ -1545,6 +1545,31 @@ def test_convergence_gate_covers_low_gain_budget_cancel_and_pending_precedence(
     assert admission.action == ConvergenceAction.STOP_BUDGET
     assert admission.snapshot.budget_exhausted is True
 
+    viable_admission = ConvergenceEvaluator(
+        evidence=evidence,
+        artifact_store=artifacts,
+        coordination=coordination,
+        policy=_convergence_policy(
+            required_section_ids=("section_required",),
+            run_budget=_budget(
+                max_tokens=300_000,
+                max_model_calls=200,
+            ),
+            minimum_replan_token_reserve=72_000,
+            estimated_tokens_per_planned_task=64_000,
+        ),
+    ).assess(
+        scheduler_snapshot=_snapshot(
+            "run_budget_viable_admission",
+            root_usage=BudgetUsage(input_tokens=150_000),
+        ),
+        root_task_id="task_run_budget_viable_admission_root",
+        cycle=0,
+        latest_information_gain=1.0,
+    )
+    assert viable_admission.action == ConvergenceAction.REPLAN
+    assert viable_admission.snapshot.budget_exhausted is False
+
     cancelled = evaluator.assess(
         scheduler_snapshot=_snapshot(
             "run_cancelled",

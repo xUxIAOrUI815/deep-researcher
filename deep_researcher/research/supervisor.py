@@ -231,12 +231,16 @@ class ConvergenceEvaluator:
                 max_run_tokens
                 - usage.input_tokens
                 - usage.output_tokens
-                <= self.policy.minimum_replan_token_reserve
+                <= (
+                    self.policy.minimum_replan_token_reserve
+                    + self.policy.estimated_tokens_per_planned_task
+                )
             )
         ):
             # A replan is itself a model turn and every admitted Worker must
-            # retain room for read -> extract -> bounded repair. Stop before
-            # scheduling work that can only overrun the authoritative budget.
+            # retain room for read -> extract -> bounded repair *and* the
+            # following authoritative replan. Stop before a plan can admit a
+            # Worker that cannot receive its complete governed envelope.
             budget_exhausted = True
         prior = self.coordination.convergence_decisions(run_id)
         previous_low_gain = (
@@ -982,10 +986,9 @@ class ResearchCoordinator:
                 remaining_tokens
                 - self.convergence.policy.minimum_replan_token_reserve,
             )
-            budget_task_limit = max(
-                1,
+            budget_task_limit = (
                 schedulable_tokens
-                // self.convergence.policy.estimated_tokens_per_planned_task,
+                // self.convergence.policy.estimated_tokens_per_planned_task
             )
         max_tasks_per_plan = min(base_task_limit, budget_task_limit)
         context = {

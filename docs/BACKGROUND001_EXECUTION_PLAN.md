@@ -710,6 +710,12 @@ Complete deliverables:
   persistence, failure causal ordering and completed-verifier/reporting-failed
   projection; finish with a configured live DeepSeek/Tavily browser run when
   provider availability permits.
+- Align live research budget admission with the complete Worker extraction
+  envelope and retain a separately explicit replan reserve. Standard-depth
+  runs must have enough governed budget to reach a required Findings section;
+  when they cannot, terminate before admitting an underfunded task and expose
+  the precise budget boundary rather than misattributing the result to an
+  already-completed evidence stage.
 
 Boundary:
 

@@ -110,7 +110,12 @@ class ApplicationRuntimeConfig:
     )
     research_budget: Budget = field(
         default_factory=lambda: Budget(
-            max_tokens=400_000,
+            # Live governed reads carry the full typed tool contract and can
+            # consume materially more context than offline fixtures.  Eight
+            # complete extraction envelopes plus one reserved replan give a
+            # standard-depth run enough room to close a required section
+            # without weakening the hard scheduler budget.
+            max_tokens=800_000,
             max_cost_usd=80.0,
             max_wall_time_seconds=7200,
             max_model_calls=160,

@@ -355,7 +355,10 @@ class ConvergencePolicy(ContractModel):
         le=10_000_000,
     )
     estimated_tokens_per_planned_task: int = Field(
-        default=48_000,
+        # This must match the minimum viable Worker extraction envelope.  A
+        # lower estimate can admit a task that the plan validator will later
+        # reject as underfunded, wasting a Supervisor cycle and its context.
+        default=64_000,
         ge=1_000,
         le=1_000_000,
     )
