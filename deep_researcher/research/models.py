@@ -383,6 +383,7 @@ class ConvergenceSnapshot(ContractModel):
     coverage_gap_section_ids: tuple[str, ...]
     blocked_high_impact_claim_ids: tuple[str, ...]
     severe_conflict_ids: tuple[str, ...]
+    irrelevant_verified_claim_ids: tuple[str, ...] = ()
     verified_claim_count: int = Field(default=0, ge=0)
     verified_citation_count: int = Field(default=0, ge=0)
     active_task_ids: tuple[str, ...]
@@ -405,6 +406,7 @@ class ConvergenceSnapshot(ContractModel):
         "coverage_gap_section_ids",
         "blocked_high_impact_claim_ids",
         "severe_conflict_ids",
+        "irrelevant_verified_claim_ids",
         "active_task_ids",
         "pending_task_ids",
         "runnable_task_ids",

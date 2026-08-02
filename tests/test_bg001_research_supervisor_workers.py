@@ -87,6 +87,7 @@ from deep_researcher.research import (
     build_research_supervisor_spec,
     build_research_worker_spec,
 )
+from deep_researcher.research.supervisor import _answers_research_question
 from deep_researcher.research.worker import WorkerObservationVerifier
 
 
@@ -103,6 +104,37 @@ def _budget(**updates: Any) -> Budget:
     }
     values.update(updates)
     return Budget(**values)
+
+
+def test_question_relevance_rejects_off_topic_claims_without_weakening_domain_match():
+    question = "调研 实时动态航迹运行态势 相关的 计算机领域的论文"
+    assert _answers_research_question(
+        question,
+        "Real-time trajectory situation awareness uses machine learning algorithms.",
+    )
+    assert not _answers_research_question(
+        question,
+        "Health data quality faces technical and organizational barriers.",
+    )
+    assert not _answers_research_question(
+        question,
+        "A CAPTCHA challenge prevented the source from being read.",
+    )
+
+
+def test_question_relevance_handles_real_chinese_input():
+    question = (
+        "\u8c03\u7814\u5b9e\u65f6\u52a8\u6001\u822a\u8ff9\u8fd0\u884c"
+        "\u6001\u52bf\u76f8\u5173\u7684\u8ba1\u7b97\u673a\u9886\u57df\u8bba\u6587"
+    )
+    assert _answers_research_question(
+        question,
+        "Real-time trajectory situation awareness uses machine learning algorithms.",
+    )
+    assert not _answers_research_question(
+        question,
+        "Health data quality faces technical and organizational barriers.",
+    )
 
 
 def _task(

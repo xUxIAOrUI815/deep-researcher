@@ -18,6 +18,7 @@ from deep_researcher.contracts import (
     utc_now,
 )
 from deep_researcher.evidence import EvidenceRuntime
+from deep_researcher.knowledge.normalization import normalize_text
 from deep_researcher.kernel import (
     AgentKernel,
     CancellationToken,
@@ -59,6 +60,55 @@ _TERMINAL_TASK_STATUSES = {
     TaskStatus.PRUNED,
     TaskStatus.MERGED,
 }
+
+
+_QUESTION_CONCEPTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("trajectory", ("航迹", "轨迹", "trajectory", "track", "flight path")),
+    (
+        "situational_awareness",
+        ("态势", "situation awareness", "situational awareness"),
+    ),
+    ("real_time", ("实时", "real-time", "realtime")),
+    (
+        "computing",
+        ("计算机", "computer", "algorithm", "machine learning", "artificial intelligence", " ai "),
+    ),
+)
+# Use escapes for the Chinese aliases so the relevance policy is independent
+# from a caller's terminal encoding on Windows.
+_QUESTION_CONCEPTS += (
+    ("trajectory_zh", ("\u822a\u8ff9", "\u8f68\u8ff9")),
+    ("situational_awareness_zh", ("\u6001\u52bf",)),
+    ("real_time_zh", ("\u5b9e\u65f6",)),
+    ("computing_zh", ("\u8ba1\u7b97\u673a",)),
+)
+
+
+def _answers_research_question(question: str, statement: str) -> bool:
+    """Require explicit domain overlap before a verified claim is reportable.
+
+    The gate is intentionally conservative: it recognizes the bilingual
+    concepts in a question, then requires at least two of them in a candidate
+    claim. For an unstructured/general question, semantic review remains the
+    relevance authority because generic lexical overlap would reject valid
+    numerical evidence. This is a rejection gate, never a heuristic acceptance
+    path.
+    """
+
+    normalized_question = normalize_text(question).casefold()
+    normalized_statement = normalize_text(statement).casefold()
+    active = [
+        aliases
+        for _, aliases in _QUESTION_CONCEPTS
+        if any(alias in normalized_question for alias in aliases)
+    ]
+    if active:
+        matched = sum(
+            any(alias in normalized_statement for alias in aliases)
+            for aliases in active
+        )
+        return matched >= min(2, len(active))
+    return True
 
 
 class ConvergenceEvaluator:
@@ -107,22 +157,6 @@ class ConvergenceEvaluator:
             if self.policy.required_section_ids
             else tuple(sorted(sections))
         )
-        complete: list[str] = []
-        gaps: list[str] = []
-        for section_id in required:
-            section = sections.get(section_id)
-            if (
-                section is not None
-                and section.coverage_status == SectionCoverageStatus.COMPLETE
-                and section.coverage_score
-                >= self.policy.minimum_section_coverage
-                and section.citation_score
-                >= self.policy.minimum_citation_coverage
-            ):
-                complete.append(section_id)
-            else:
-                gaps.append(section_id)
-
         blocked = (
             tuple(
                 item.claim_id
@@ -151,12 +185,73 @@ class ConvergenceEvaluator:
             if claim_collection is not None
             else ()
         )
-        verified_claim_ids = {
+        all_verified_claim_ids = {
             item.claim_id
             for item in claim_items
             if getattr(getattr(item, "status", None), "value", None)
             == "supported"
         }
+        report_collection = getattr(repository, "reports", None)
+        report_items = (
+            report_collection.list(run_id)
+            if report_collection is not None
+            else ()
+        )
+        report_questions = {
+            item.report_id: item.research_question
+            for item in report_items
+        }
+        claim_questions = {
+            claim_id: report_questions.get(getattr(section, "report_id", ""), "")
+            for section in sections.values()
+            for claim_id in (
+                *getattr(section, "claim_ids", ()),
+                *getattr(section, "required_claim_ids", ()),
+            )
+            if report_questions.get(getattr(section, "report_id", ""))
+        }
+        irrelevant_verified_claim_ids = tuple(
+            sorted(
+                claim.claim_id
+                for claim in claim_items
+                if claim.claim_id in all_verified_claim_ids
+                and claim_questions.get(claim.claim_id)
+                and not _answers_research_question(
+                    claim_questions[claim.claim_id],
+                    getattr(claim, "statement", ""),
+                )
+            )
+        )
+        verified_claim_ids = all_verified_claim_ids - set(
+            irrelevant_verified_claim_ids
+        )
+        complete: list[str] = []
+        gaps: list[str] = []
+        for section_id in required:
+            section = sections.get(section_id)
+            section_claim_ids = (
+                set(
+                    getattr(section, "required_claim_ids", ())
+                    or getattr(section, "claim_ids", ())
+                )
+                if section
+                else set()
+            )
+            has_irrelevant_claim = bool(
+                section_claim_ids.intersection(irrelevant_verified_claim_ids)
+            )
+            if (
+                section is not None
+                and not has_irrelevant_claim
+                and section.coverage_status == SectionCoverageStatus.COMPLETE
+                and section.coverage_score
+                >= self.policy.minimum_section_coverage
+                and section.citation_score
+                >= self.policy.minimum_citation_coverage
+            ):
+                complete.append(section_id)
+            else:
+                gaps.append(section_id)
         citation_items = (
             citation_collection.list(run_id)
             if citation_collection is not None
@@ -265,6 +360,7 @@ class ConvergenceEvaluator:
             coverage_gap_section_ids=tuple(gaps),
             blocked_high_impact_claim_ids=blocked,
             severe_conflict_ids=severe,
+            irrelevant_verified_claim_ids=irrelevant_verified_claim_ids,
             verified_claim_count=len(verified_claim_ids),
             verified_citation_count=verified_citation_count,
             active_task_ids=tuple(active),

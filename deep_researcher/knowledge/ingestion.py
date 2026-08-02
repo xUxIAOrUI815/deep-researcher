@@ -53,9 +53,12 @@ _VALID_ID = re.compile(r"^[a-z][a-z0-9_]*_[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 # rejected merely for mentioning one of these terms.
 _NON_CONTENT_MARKERS = (
     "access denied",
+    "are you a robot",
+    "robot check",
     "request rejected",
     "forbidden",
     "captcha",
+    "security challenge",
     "verify you are human",
     "unusual traffic",
     "attention required",

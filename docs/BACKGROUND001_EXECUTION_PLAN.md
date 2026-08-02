@@ -1642,3 +1642,30 @@ Remaining risks: The final post-fix configured live retry received permanent
   the repaired Writer/convergence defects. The two suite warnings are upstream
   websocket API deprecations and do not affect current MCP behavior.
 ```
+
+### Branch 18 execution record
+
+```text
+Branch: codex/bg001-18-live-research-quality-recovery
+Scope delivered: Live-quality recovery for governed research without relaxing
+  evidence or review gates. Source ingestion retains access/robot/CAPTCHA and
+  security-challenge responses as blocked provenance but prevents them from
+  entering passages, candidates, claims or the evidence graph. Convergence now
+  records supported claims that are off-topic for an attached report question;
+  those claims cannot supply a verified-claim/citation count or mark their
+  required section complete. The deterministic domain gate recognises Chinese
+  and English trajectory, situational-awareness, real-time and computing
+  concepts and requires at least two active concepts in the candidate claim.
+  Generic questions remain with the semantic reviewer to avoid false lexical
+  rejection of legitimate numerical evidence.
+Boundary check: The failed run remains immutable and auditable. No CAPTCHA or
+  unrelated claim is silently converted to missing evidence; both create an
+  explicit gap that returns research to the normal bounded replan/terminal
+  path. No RL, provider authority, reviewer rubric, scheduler lease semantics,
+  or report citation invariant is weakened.
+Tests: 294 passed (`pytest -q`); focused ingestion, Chinese/English relevance,
+  supervisor, application-runtime and Console suites passed. Two warnings are
+  upstream websocket deprecations.
+Status: Feature implementation is verified locally; service restart and a new
+  live run are required because historical terminal runs are immutable.
+```

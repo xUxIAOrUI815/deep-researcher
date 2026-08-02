@@ -260,17 +260,17 @@ def test_access_denied_interstitial_is_preserved_but_cannot_enter_evidence_graph
 ):
     runtime = build_knowledge_runtime(tmp_path / "runtime")
     denied = deepcopy(RESEARCH)
-    denied["sources"][0]["title"] = "Access Denied"
-    denied["passages"][0]["text"] = "Access Denied"
+    denied["sources"][0]["title"] = "Are you a robot?"
+    denied["passages"][0]["text"] = "Are you a robot?"
     denied["scraped_data_cache"][0].update(
         {
-            "title": "Access Denied",
-            "markdown": "Access Denied. Your request has been blocked.",
+            "title": "Are you a robot?",
+            "markdown": "Are you a robot? Complete the CAPTCHA challenge.",
             "http_status": 403,
         }
     )
     candidates = deepcopy(CANDIDATES)
-    candidates["evidence"][0]["quote"] = "Access Denied"
+    candidates["evidence"][0]["quote"] = "Are you a robot?"
     try:
         observed = runtime.ingestion.ingest_research_observation(
             denied,
