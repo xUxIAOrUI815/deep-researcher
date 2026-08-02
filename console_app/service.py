@@ -759,12 +759,6 @@ class ResearchConsoleService:
                 )
             elif status == "failed" and role_id == failure_role_id:
                 role_status = "failed"
-            elif (
-                status == "failed"
-                and failure_role_id is None
-                and role_id == last_role
-            ):
-                role_status = "failed"
             elif status == "cancelled" and role_id == last_role:
                 role_status = "cancelled"
             elif role_events and (

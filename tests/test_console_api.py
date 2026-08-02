@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from console_app.app import create_app
 from console_app.service import ResearchConsoleService
 from deep_researcher.application import (
+    ApplicationRunRecord,
     ApplicationRunStatus,
     ResearchCreateRequest,
     TimelineEventSummary,
@@ -112,6 +113,51 @@ def test_console_prefers_writer_cause_over_application_terminal_wrapper():
     )
     assert errors[0].code == "model_invocation_failed"
     assert errors[0].is_primary is True
+
+
+def test_budget_terminal_failure_does_not_relabel_completed_evidence_role():
+    record = ApplicationRunRecord(
+        research_id="research_budget_role",
+        thread_id="thread_budget_role",
+        session_id="session_budget_role",
+        run_id="run_budget_role",
+        trace_id="trace_budget_role",
+        root_task_id="task_budget_role",
+        report_id="report_budget_role",
+        query="Budget projection test",
+        status=ApplicationRunStatus.FAILED,
+        current_stage="failed",
+        error_code="research_budget_exhausted",
+    )
+    timeline = (
+        TimelineEventSummary(
+            event_type="span_completed",
+            timestamp="2026-08-01T00:00:00+00:00",
+            sequence_no=1,
+            actor_id="agent_spec_evidence_verifier_1_0_0",
+            task_id=None,
+            payload={"stage": "evidence_verification"},
+        ),
+        TimelineEventSummary(
+            event_type="run_failed",
+            timestamp="2026-08-01T00:01:00+00:00",
+            sequence_no=2,
+            actor_id="runtime_application",
+            task_id=None,
+            payload={"error_code": "research_budget_exhausted"},
+        ),
+    )
+    roles, _ = ResearchConsoleService._role_views(
+        record=record,
+        active_task=None,
+        timeline=timeline,
+        task_records=(),
+        failure_role_id=None,
+        decision_summary="The authoritative run budget is exhausted.",
+    )
+    status_by_role = {item.role_id: item.status for item in roles}
+    assert status_by_role["evidence_verifier"] == "completed"
+    assert "failed" not in status_by_role.values()
 
 
 async def _wait_for_status(
